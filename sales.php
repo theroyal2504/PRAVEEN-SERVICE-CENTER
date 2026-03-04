@@ -15,7 +15,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['add_sale'])) {
     $sale_date = $_POST['sale_date'];
     $invoice_number = mysqli_real_escape_string($conn, $_POST['invoice_number']);
     $payment_method = $_POST['payment_method'];
-    $paid_amount = $_POST['paid_amount'] ?? 0;
+    $paid_amount = floatval($_POST['paid_amount'] ?? 0);
     $created_by = $_SESSION['user_id'];
     
     // Start transaction
@@ -51,8 +51,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['add_sale'])) {
         for ($i = 0; $i < count($part_ids); $i++) {
             if (!empty($part_ids[$i]) && $quantities[$i] > 0) {
                 $part_id = $part_ids[$i];
-                $quantity = $quantities[$i];
-                $selling_price = $selling_prices[$i];
+                $quantity = intval($quantities[$i]);
+                $selling_price = floatval($selling_prices[$i]);
                 
                 // Check stock
                 $stock_check = mysqli_query($conn, "SELECT quantity FROM stock WHERE part_id = $part_id");
@@ -68,7 +68,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['add_sale'])) {
                     // Update stock
                     mysqli_query($conn, "UPDATE stock SET quantity = quantity - $quantity WHERE part_id = $part_id");
                 } else {
-                    throw new Exception("Insufficient stock for item: " . $part_id);
+                    throw new Exception("Insufficient stock for item");
                 }
             }
         }
@@ -78,14 +78,21 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['add_sale'])) {
         $payment_status = 'paid';
         if ($due_amount > 0) {
             $payment_status = 'partial';
+        } elseif ($due_amount < 0) {
+            // If paid amount exceeds total, adjust paid amount
+            $paid_amount = $total_amount;
+            $due_amount = 0;
+            $payment_status = 'paid';
         }
         
         // Update sale with total amount and payment status
-        mysqli_query($conn, "UPDATE sales SET 
-                            total_amount = $total_amount,
-                            due_amount = $due_amount,
-                            payment_status = '$payment_status' 
-                            WHERE id = $sale_id");
+        $update_query = "UPDATE sales SET 
+                        total_amount = $total_amount,
+                        paid_amount = $paid_amount,
+                        due_amount = $due_amount,
+                        payment_status = '$payment_status' 
+                        WHERE id = $sale_id";
+        mysqli_query($conn, $update_query);
         
         // Record initial payment if any
         if ($paid_amount > 0) {
@@ -139,6 +146,40 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
     <title>Sales - Bike Management System</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css">
+    <style>
+        .editable-paid {
+            background-color: #fff3cd;
+            border: 2px solid #ffc107;
+            font-weight: bold;
+            font-size: 1.2em;
+        }
+        .due-positive {
+            color: #dc3545;
+            font-weight: bold;
+            background-color: #f8d7da;
+        }
+        .due-zero {
+            color: #28a745;
+            font-weight: bold;
+            background-color: #d4edda;
+        }
+        .grand-total {
+            font-size: 1.2em;
+            font-weight: bold;
+            background-color: #cce5ff;
+        }
+        .item-row {
+            transition: all 0.3s ease;
+        }
+        .item-row:hover {
+            background-color: #f5f5f5;
+        }
+        .calculation-row {
+            border-top: 2px solid #dee2e6;
+            margin-top: 10px;
+            padding-top: 10px;
+        }
+    </style>
 </head>
 <body>
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
@@ -205,27 +246,25 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                                 <div class="col-12">
                                     <div class="card bg-light">
                                         <div class="card-header">
-                                            <ul class="nav nav-tabs card-header-tabs">
-                                                <li class="nav-item">
-                                                    <a class="nav-link active" id="existing-customer-tab" data-bs-toggle="tab" href="#existing-customer">Existing Customer</a>
+                                            <ul class="nav nav-tabs card-header-tabs" id="customerTab" role="tablist">
+                                                <li class="nav-item" role="presentation">
+                                                    <a class="nav-link active" id="existing-customer-tab" data-bs-toggle="tab" href="#existing-customer" role="tab">Existing Customer</a>
                                                 </li>
-                                                <li class="nav-item">
-                                                    <a class="nav-link" id="new-customer-tab" data-bs-toggle="tab" href="#new-customer">New Customer</a>
+                                                <li class="nav-item" role="presentation">
+                                                    <a class="nav-link" id="new-customer-tab" data-bs-toggle="tab" href="#new-customer" role="tab">New Customer</a>
                                                 </li>
                                             </ul>
                                         </div>
                                         <div class="card-body">
                                             <div class="tab-content">
                                                 <!-- Existing Customer Tab -->
-                                                <div class="tab-pane fade show active" id="existing-customer">
+                                                <div class="tab-pane fade show active" id="existing-customer" role="tabpanel">
                                                     <div class="row">
                                                         <div class="col-md-8">
                                                             <div class="mb-3">
                                                                 <label for="customer_id" class="form-label">Select Customer</label>
                                                                 <select class="form-control" id="customer_id" name="customer_id" onchange="loadCustomerVehicle()">
-                                                                    <option value="">Local</option>
-                                                                    <option value="">Outer</option>
-                                                                     <option value="">Walk-in Customer</option>
+                                                                    <option value="">Walk-in Customer</option>
                                                                     <?php 
                                                                     mysqli_data_seek($customers, 0);
                                                                     while($customer = mysqli_fetch_assoc($customers)): 
@@ -258,7 +297,7 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                                                 </div>
                                                 
                                                 <!-- New Customer Tab -->
-                                                <div class="tab-pane fade" id="new-customer">
+                                                <div class="tab-pane fade" id="new-customer" role="tabpanel">
                                                     <div class="row">
                                                         <div class="col-md-4">
                                                             <div class="mb-3">
@@ -327,9 +366,9 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                                 </div>
                                 <div class="col-md-3">
                                     <div class="mb-3">
-                                        <label for="paid_amount" class="form-label">Paid Amount</label>
-                                        <input type="number" step="0.01" class="form-control" id="paid_amount" name="paid_amount" value="0" min="0">
-                                        <small class="text-muted">Leave 0 for full payment later</small>
+                                        <label for="paid_amount" class="form-label">Paid Amount (₹)</label>
+                                        <input type="number" step="0.01" class="form-control editable-paid" id="paid_amount" name="paid_amount" value="0" min="0">
+                                        <small class="text-muted">Edit this amount to calculate due</small>
                                     </div>
                                 </div>
                             </div>
@@ -339,16 +378,16 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                                 <table class="table table-bordered" id="itemsTable">
                                     <thead class="table-dark">
                                         <tr>
-                                            <th>Part</th>
-                                            <th>Available Stock</th>
-                                            <th>Quantity</th>
-                                            <th>Selling Price</th>
-                                            <th>Total</th>
-                                            <th>Action</th>
+                                            <th width="30%">Part</th>
+                                            <th width="10%">Available Stock</th>
+                                            <th width="10%">Quantity</th>
+                                            <th width="15%">Selling Price (₹)</th>
+                                            <th width="15%">Total (₹)</th>
+                                            <th width="10%">Action</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        <tr>
+                                        <tr class="item-row">
                                             <td>
                                                 <select class="form-control part-select" name="part_id[]" required>
                                                     <option value="">Select Part</option>
@@ -371,36 +410,48 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                                             <td><button type="button" class="btn btn-danger btn-sm remove-row"><i class="bi bi-trash"></i></button></td>
                                         </tr>
                                     </tbody>
-                                    <tfoot>
-                                        <tr class="table-info">
-                                            <td colspan="4" class="text-end"><strong>Grand Total:</strong></td>
-                                            <td><input type="text" class="form-control" id="grandTotal" readonly style="font-weight:bold; background-color:#e3f2fd;"></td>
-                                            <td></td>
-                                        </tr>
-                                        <tr class="table-success">
-                                            <td colspan="4" class="text-end"><strong>Paid Amount:</strong></td>
-                                            <td><input type="text" class="form-control" id="displayPaidAmount" readonly value="0.00" style="font-weight:bold; color:green;"></td>
-                                            <td></td>
-                                        </tr>
-                                        <tr class="table-danger">
-                                            <td colspan="4" class="text-end"><strong>Due Amount:</strong></td>
-                                            <td><input type="text" class="form-control" id="dueAmount" readonly value="0.00" style="color: red; font-weight: bold; background-color:#ffebee;"></td>
-                                            <td></td>
-                                        </tr>
-                                    </tfoot>
                                 </table>
                             </div>
                             
-                            <div class="row mt-3">
-                                <div class="col-12">
+                            <!-- Calculation Section -->
+                            <div class="row calculation-row">
+                                <div class="col-md-6">
                                     <button type="button" class="btn btn-success" id="addRow">
                                         <i class="bi bi-plus-circle"></i> Add Another Item
                                     </button>
-                                    <button type="submit" name="add_sale" class="btn btn-primary" id="completeSale">
+                                    <button type="button" class="btn btn-info" id="calculateTotal">
+                                        <i class="bi bi-calculator"></i> Calculate Total
+                                    </button>
+                                </div>
+                                <div class="col-md-6">
+                                    <div class="card">
+                                        <div class="card-body">
+                                            <table class="table table-sm table-borderless mb-0">
+                                                <tr>
+                                                    <td width="50%"><strong>Grand Total:</strong></td>
+                                                    <td><input type="text" class="form-control grand-total" id="grandTotal" readonly value="0.00" style="font-weight:bold; background-color:#e3f2fd; text-align:right;"></td>
+                                                </tr>
+                                                <tr>
+                                                    <td><strong>Paid Amount:</strong></td>
+                                                    <td><input type="text" class="form-control" id="displayPaidAmount" readonly value="0.00" style="font-weight:bold; color:#28a745; text-align:right;"></td>
+                                                </tr>
+                                                <tr>
+                                                    <td><strong>Due Amount:</strong></td>
+                                                    <td><input type="text" class="form-control" id="dueAmount" readonly value="0.00" style="font-weight: bold; text-align:right;"></td>
+                                                </tr>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="row mt-3">
+                                <div class="col-12 text-center">
+                                    <button type="submit" name="add_sale" class="btn btn-primary btn-lg" id="completeSale">
                                         <i class="bi bi-cash"></i> Complete Sale & Generate Invoice
                                     </button>
-                                    <button type="reset" class="btn btn-secondary">
-                                        <i class="bi bi-arrow-counterclockwise"></i> Reset
+                                    <button type="reset" class="btn btn-secondary btn-lg">
+                                        <i class="bi bi-arrow-counterclockwise"></i> Reset Form
                                     </button>
                                 </div>
                             </div>
@@ -415,7 +466,7 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
             <div class="col-12">
                 <div class="card">
                     <div class="card-header bg-success text-white">
-                        <h5 class="mb-0"><i class="bi bi-clock-history"></i> Recent Sales with Vehicle Details</h5>
+                        <h5 class="mb-0"><i class="bi bi-clock-history"></i> Recent Sales</h5>
                     </div>
                     <div class="card-body">
                         <div class="table-responsive">
@@ -425,9 +476,8 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                                         <th>Date</th>
                                         <th>Invoice #</th>
                                         <th>Customer</th>
-                                        <th>Phone</th>
-                                        <th>Vehicle Reg No.</th>
-                                        <th>Total Amount</th>
+                                        <th>Vehicle</th>
+                                        <th>Total</th>
                                         <th>Paid</th>
                                         <th>Due</th>
                                         <th>Status</th>
@@ -439,22 +489,12 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                                     <tr>
                                         <td><?php echo date('d-m-Y', strtotime($sale['sale_date'])); ?></td>
                                         <td><strong><?php echo htmlspecialchars($sale['invoice_number']); ?></strong></td>
-                                        <td><?php echo htmlspecialchars($sale['customer_name'] ?? 'Walk-in Customer'); ?></td>
-                                        <td>
-                                            <?php 
-                                            if($sale['customer_name']) {
-                                                $customer_phone = mysqli_fetch_assoc(mysqli_query($conn, "SELECT phone FROM customers WHERE id = " . $sale['customer_id']));
-                                                echo $customer_phone['phone'] ?? '-';
-                                            } else {
-                                                echo '-';
-                                            }
-                                            ?>
-                                        </td>
+                                        <td><?php echo htmlspecialchars($sale['customer_name'] ?? 'Walk-in'); ?></td>
                                         <td>
                                             <?php if($sale['vehicle_registration']): ?>
-                                                <span class="badge bg-info fs-6 p-2"><?php echo $sale['vehicle_registration']; ?></span>
+                                                <span class="badge bg-info"><?php echo $sale['vehicle_registration']; ?></span>
                                             <?php else: ?>
-                                                <span class="text-muted">-</span>
+                                                -
                                             <?php endif; ?>
                                         </td>
                                         <td>₹<?php echo number_format($sale['total_amount'], 2); ?></td>
@@ -480,14 +520,14 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                                         </td>
                                         <td>
                                             <div class="btn-group btn-group-sm">
-                                                <a href="sale_view.php?id=<?php echo $sale['id']; ?>" class="btn btn-info" title="View Details">
+                                                <a href="sale_view.php?id=<?php echo $sale['id']; ?>" class="btn btn-info" title="View">
                                                     <i class="bi bi-eye"></i>
                                                 </a>
-                                                <a href="invoice.php?id=<?php echo $sale['id']; ?>" class="btn btn-secondary" target="_blank" title="Print Invoice">
+                                                <a href="invoice.php?id=<?php echo $sale['id']; ?>" class="btn btn-secondary" target="_blank" title="Print">
                                                     <i class="bi bi-printer"></i>
                                                 </a>
                                                 <?php if($sale['due_amount'] > 0): ?>
-                                                <a href="sale_view.php?id=<?php echo $sale['id']; ?>#payments" class="btn btn-warning" title="Collect Payment">
+                                                <a href="sale_view.php?id=<?php echo $sale['id']; ?>#payments" class="btn btn-warning" title="Collect">
                                                     <i class="bi bi-cash"></i>
                                                 </a>
                                                 <?php endif; ?>
@@ -546,6 +586,58 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
         const displayPaidAmount = document.getElementById('displayPaidAmount');
         const dueAmountInput = document.getElementById('dueAmount');
         
+        // Function to update all calculations
+        function updateCalculations() {
+            calculateGrandTotal();
+            updateDueAmount();
+        }
+        
+        // Calculate grand total from all rows
+        function calculateGrandTotal() {
+            let grandTotal = 0;
+            document.querySelectorAll('.row-total').forEach(input => {
+                grandTotal += parseFloat(input.value) || 0;
+            });
+            grandTotalInput.value = grandTotal.toFixed(2);
+            return grandTotal;
+        }
+        
+        // Update due amount based on grand total and paid amount
+        function updateDueAmount() {
+            const grandTotal = parseFloat(grandTotalInput.value) || 0;
+            const paidAmount = parseFloat(paidAmountInput.value) || 0;
+            let dueAmount = grandTotal - paidAmount;
+            
+            // Ensure due amount is not negative
+            if (dueAmount < 0) {
+                dueAmount = 0;
+                paidAmountInput.value = grandTotal.toFixed(2);
+            }
+            
+            displayPaidAmount.value = paidAmount.toFixed(2);
+            dueAmountInput.value = dueAmount.toFixed(2);
+            
+            // Style due amount based on value
+            if (dueAmount > 0) {
+                dueAmountInput.style.color = '#dc3545';
+                dueAmountInput.style.backgroundColor = '#f8d7da';
+                dueAmountInput.style.fontWeight = 'bold';
+            } else {
+                dueAmountInput.style.color = '#28a745';
+                dueAmountInput.style.backgroundColor = '#d4edda';
+                dueAmountInput.style.fontWeight = 'bold';
+            }
+            
+            // Validate paid amount against grand total
+            if (paidAmount > grandTotal) {
+                paidAmountInput.style.borderColor = '#dc3545';
+                paidAmountInput.style.backgroundColor = '#f8d7da';
+            } else {
+                paidAmountInput.style.borderColor = '#ffc107';
+                paidAmountInput.style.backgroundColor = '#fff3cd';
+            }
+        }
+        
         // Add new row
         document.getElementById('addRow').addEventListener('click', function() {
             const tbody = document.querySelector('#itemsTable tbody');
@@ -560,6 +652,15 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
             const select = newRow.querySelector('select');
             if (select) select.selectedIndex = 0;
             
+            // Add remove button event
+            const removeBtn = newRow.querySelector('.remove-row');
+            removeBtn.addEventListener('click', function() {
+                if (tbody.rows.length > 1) {
+                    this.closest('tr').remove();
+                    updateCalculations();
+                }
+            });
+            
             tbody.appendChild(newRow);
         });
         
@@ -569,7 +670,7 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                 const tbody = document.querySelector('#itemsTable tbody');
                 if (tbody.rows.length > 1) {
                     e.target.closest('tr').remove();
-                    calculateGrandTotal();
+                    updateCalculations();
                 }
             }
         });
@@ -598,7 +699,7 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
             }
         });
         
-        // Calculate row total and validate stock
+        // Calculate row total on quantity or price change
         document.addEventListener('input', function(e) {
             if (e.target.classList.contains('quantity') || e.target.classList.contains('selling-price')) {
                 const row = e.target.closest('tr');
@@ -615,41 +716,19 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                 
                 const total = quantity * price;
                 row.querySelector('.row-total').value = total.toFixed(2);
-                calculateGrandTotal();
+                updateCalculations();
             }
         });
         
-        // Update due amount when paid amount changes
+        // Update due amount when paid amount changes (real-time)
         paidAmountInput.addEventListener('input', function() {
             updateDueAmount();
         });
         
-        function calculateGrandTotal() {
-            let grandTotal = 0;
-            document.querySelectorAll('.row-total').forEach(input => {
-                grandTotal += parseFloat(input.value) || 0;
-            });
-            grandTotalInput.value = grandTotal.toFixed(2);
-            updateDueAmount();
-        }
-        
-        function updateDueAmount() {
-            const grandTotal = parseFloat(grandTotalInput.value) || 0;
-            const paidAmount = parseFloat(paidAmountInput.value) || 0;
-            const dueAmount = grandTotal - paidAmount;
-            
-            displayPaidAmount.value = paidAmount.toFixed(2);
-            dueAmountInput.value = dueAmount.toFixed(2);
-            
-            // Change color based on due amount
-            if (dueAmount > 0) {
-                dueAmountInput.style.color = 'red';
-                dueAmountInput.style.fontWeight = 'bold';
-            } else {
-                dueAmountInput.style.color = 'green';
-                dueAmountInput.style.fontWeight = 'bold';
-            }
-        }
+        // Manual calculate button
+        document.getElementById('calculateTotal').addEventListener('click', function() {
+            updateCalculations();
+        });
         
         // Auto-uppercase for registration fields
         const regFields = ['existing_vehicle', 'new_vehicle_registration'];
@@ -689,7 +768,21 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                 alert('Please add at least one item to the sale');
                 return false;
             }
+            
+            // Validate paid amount doesn't exceed total
+            const grandTotal = parseFloat(grandTotalInput.value) || 0;
+            const paidAmount = parseFloat(paidAmountInput.value) || 0;
+            
+            if (paidAmount > grandTotal) {
+                if (!confirm('Paid amount (₹' + paidAmount.toFixed(2) + ') is greater than grand total (₹' + grandTotal.toFixed(2) + '). Do you want to continue?')) {
+                    e.preventDefault();
+                    return false;
+                }
+            }
         });
+        
+        // Initialize on page load
+        updateCalculations();
     });
     </script>
 
