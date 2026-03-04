@@ -106,6 +106,22 @@ $payment_summary = mysqli_fetch_assoc(mysqli_query($conn, "SELECT
     <title>Sale #<?php echo htmlspecialchars($sale_details['invoice_number']); ?></title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css">
+    <style>
+        /* smaller fonts for payment summary and breakdown */
+        .payment-summary .card-body h6 { font-size: 10px; margin-bottom: 4px; }
+        .payment-summary .card-body h3 { font-size: 16px; margin-bottom: 0; }
+        .payment-summary .card-body { padding: 8px; }
+        .payment-breakdown .card-body strong { font-size: 11px; display: block; margin-bottom: 2px; }
+        .payment-breakdown .card-body h4 { font-size: 16px; margin: 0; }
+        .payment-breakdown .border { padding: 6px; }
+        .payment-breakdown .row.mt-3 { margin-top: 8px !important; }
+        /* reduce spacing between sections */
+        .payment-summary, .payment-breakdown, .card.mb-4 { margin-bottom: 10px !important; }
+        .payment-summary .row > div, .payment-breakdown .row > div { padding-bottom: 0 !important; }
+        /* specific shrink for items sold before history */
+        .items-sold-section { margin-bottom: 5px !important; }
+        .payment-history-section { margin-top: 5px !important; }
+    </style>
 </head>
 <body>
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
@@ -211,7 +227,7 @@ $payment_summary = mysqli_fetch_assoc(mysqli_query($conn, "SELECT
         </div>
 
         <!-- Payment Summary -->
-        <div class="row mb-4">
+        <div class="row mb-4 payment-summary">
             <div class="col-md-3">
                 <div class="card bg-success text-white">
                     <div class="card-body">
@@ -256,7 +272,7 @@ $payment_summary = mysqli_fetch_assoc(mysqli_query($conn, "SELECT
         </div>
 
         <!-- Payment Method Breakdown -->
-        <div class="row mb-4">
+        <div class="row mb-4 payment-breakdown">
             <div class="col-12">
                 <div class="card">
                     <div class="card-header">
@@ -289,18 +305,18 @@ $payment_summary = mysqli_fetch_assoc(mysqli_query($conn, "SELECT
                                 </div>
                             </div>
                         </div>
-                        <div class="row mt-3">
+                        <!--<div class="row mt-3">
                             <div class="col-12 text-end">
                                 <strong>Total Paid: </strong> ₹<?php echo number_format($payment_summary['total_paid'] ?? 0, 2); ?>
-                            </div>
-                        </div>
+                            </div>  
+                        </div>-->
                     </div>
                 </div>
             </div>
         </div>
 
         <!-- Items Sold -->
-        <div class="card mb-4">
+        <div class="card mb-4 items-sold-section">
             <div class="card-header">
                 <h5 class="mb-0">Items Sold</h5>
             </div>
@@ -348,7 +364,7 @@ $payment_summary = mysqli_fetch_assoc(mysqli_query($conn, "SELECT
         </div>
 
         <!-- Payment History -->
-        <div class="card">
+        <div class="card payment-history-section">
             <div class="card-header">
                 <h5 class="mb-0">Payment History (<?php echo $payment_summary['payment_count'] ?? 0; ?> payments)</h5>
             </div>

@@ -57,15 +57,35 @@ while($row = mysqli_fetch_assoc($settings_result)) {
             .no-print {
                 display: none !important;
             }
-            body {
+            * {
+                page-break-inside: avoid !important;
+            }
+            html, body {
                 background: white;
-                font-size: 12pt;
+                font-size: 11pt;
+                margin: 0;
+                padding: 0;
+                height: auto;
+                overflow: hidden;
+            }
+            @page {
+                size: A4;
+                margin: 10mm;
             }
             .invoice-box {
                 border: none;
                 box-shadow: none;
                 margin: 0;
-                padding: 0;
+                padding: 20px;
+                /* remove strict height to allow content to flow, will scale instead */
+                /* max-height: 297mm; */
+                page-break-inside: avoid;
+                transform: scale(0.95);
+                transform-origin: top left;
+                overflow: hidden;
+            }
+            table {
+                page-break-inside: avoid;
             }
             .badge {
                 border: 1px solid #000;
@@ -75,40 +95,54 @@ while($row = mysqli_fetch_assoc($settings_result)) {
         }
         .invoice-box {
             max-width: 900px;
-            margin: 20px auto;
-            padding: 30px;
+            margin: 8px auto;
+            padding: 10px;
             border: 1px solid #ddd;
-            box-shadow: 0 0 15px rgba(0, 0, 0, 0.1);
-            font-size: 14px;
-            line-height: 1.6;
+            box-shadow: 0 0 8px rgba(0, 0, 0, 0.1);
+            font-size: 11px;
+            line-height: 1.3;
             color: #333;
             background: white;
         }
         .invoice-header {
             text-align: center;
-            margin-bottom: 30px;
-            padding-bottom: 20px;
+            margin-bottom: 3px;
+            padding-bottom: 3px;
             border-bottom: 2px solid #f0f0f0;
         }
         .invoice-header h2 {
             color: #2c3e50;
-            margin-bottom: 5px;
+            margin-bottom: 1px;
+            margin-top: 0;
             font-weight: bold;
+            font-size: 14px;
         }
         .invoice-header h4 {
             color: #7f8c8d;
             margin-top: 0;
+            margin-bottom: 1px;
+            font-size: 11px;
         }
         .business-info {
             text-align: center;
-            margin-bottom: 20px;
-            padding: 10px;
+            margin-bottom: 2px;
+            padding: 3px;
             background: #f8f9fa;
             border-radius: 5px;
+            font-size: 10px;
+        }
+        /* combined details section */
+        .details-section {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            justify-content: space-between;
+            font-size: 10px;
         }
         .invoice-details {
-            margin-bottom: 30px;
-            padding: 15px;
+            flex: 1 1 45%;
+            margin: 0;
+            padding: 6px;
             background: #f8f9fa;
             border-radius: 5px;
         }
@@ -116,35 +150,38 @@ while($row = mysqli_fetch_assoc($settings_result)) {
             width: 100%;
         }
         .invoice-details td {
-            padding: 5px;
+            padding: 2px 3px;
         }
         .customer-details {
-            margin-bottom: 30px;
-            padding: 15px;
+            flex: 1 1 45%;
+            margin: 0;
+            padding: 6px;
             border: 1px solid #dee2e6;
             border-radius: 5px;
             background: #fff;
         }
         .customer-details h5 {
             color: #2c3e50;
-            margin-top: 0;
-            margin-bottom: 15px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid #f0f0f0;
+            margin: 0 0 6px 0;
+            padding-bottom: 4px;
+            border-bottom: 2x solid #f0f0f0;
+            font-size: 12px;
         }
+        
         .items-table {
             width: 100%;
-            margin-bottom: 30px;
+            margin-bottom: 10px;
             border-collapse: collapse;
+            font-size: 10px;
         }
         .items-table th {
             background: #2c3e50;
             color: white;
-            padding: 12px;
+            padding: 6px 8px;
             text-align: left;
         }
         .items-table td {
-            padding: 10px;
+            padding: 4px 6px;
             border-bottom: 1px solid #dee2e6;
         }
         .items-table tfoot tr {
@@ -171,11 +208,11 @@ while($row = mysqli_fetch_assoc($settings_result)) {
             border: 1px solid #b8daff;
         }
         .footer-note {
-            margin-top: 40px;
+            margin-top: 20px;
             text-align: center;
-            padding-top: 20px;
+            padding-top: 10px;
             border-top: 2px solid #f0f0f0;
-            font-size: 12px;
+            font-size: 11px;
             color: #7f8c8d;
         }
     </style>
@@ -219,71 +256,71 @@ while($row = mysqli_fetch_assoc($settings_result)) {
         </div>
 
         <!-- Invoice Details -->
-        <div class="invoice-details">
-            <table>
-                <tr>
-                    <td><strong>Invoice No:</strong></td>
-                    <td><?php echo htmlspecialchars($sale_details['invoice_number']); ?></td>
-                    <td><strong>Invoice Date:</strong></td>
-                    <td><?php echo date('d-m-Y', strtotime($sale_details['sale_date'])); ?></td>
-                </tr>
-                <tr>
-                    <td><strong>Place of Supply:</strong></td>
-                    <td><?php echo date('h:i A', strtotime($sale_details['created_at'])); ?></td>
-                    <td><strong>Payment Status:</strong></td>
-                    <td>
-                        <span class="payment-status status-<?php echo $sale_details['payment_status']; ?>">
-                            <?php 
-                            if($sale_details['payment_status'] == 'paid') echo 'PAID';
-                            elseif($sale_details['payment_status'] == 'partial') echo 'PARTIAL';
-                            else echo 'PENDING';
-                            ?>
-                        </span>
-                    </td>
-                </tr>
-            </table>
-        </div>
-
-        <!-- Customer Details Section - FIXED: Now properly shows customer name and vehicle -->
-        <div class="customer-details">
-            <h5><i class="bi bi-person"></i> Customer Details</h5>
-            <table style="width: 100%;">
-                <tr>
-                    <td style="width: 150px;"><strong>Customer Name:</strong></td>
-                    <td><?php echo htmlspecialchars($sale_details['customer_name'] ?? 'Walk-in Customer'); ?></td>
-                </tr>
-                <?php if(!empty($sale_details['phone'])): ?>
-                <tr>
-                    <td><strong>Phone No:</strong></td>
-                    <td><?php echo htmlspecialchars($sale_details['phone']); ?></td>
-                </tr>
-                <?php endif; ?>
-                <?php if(!empty($sale_details['email'])): ?>
-                <tr>
-                    <td><strong>Email:</strong></td>
-                    <td><?php echo htmlspecialchars($sale_details['email']); ?></td>
-                </tr>
-                <?php endif; ?>
-                <!-- Vehicle Registration - FIXED: Now shows vehicle number -->
-                <tr>
-                    <td><strong>Vehicle Reg No:</strong></td>
-                    <td>
-                        <?php if(!empty($sale_details['vehicle_registration'])): ?>
-                            <span class="vehicle-badge">
-                                <i class="bi bi-bicycle"></i> <?php echo htmlspecialchars($sale_details['vehicle_registration']); ?>
+        <div class="details-section">
+            <div class="invoice-details">
+                <table>
+                    <tr>
+                        <td><strong>Invoice No:</strong></td>
+                        <td><?php echo htmlspecialchars($sale_details['invoice_number']); ?></td>
+                        <td><strong>Invoice Date:</strong></td>
+                        <td><?php echo date('d-m-Y', strtotime($sale_details['sale_date'])); ?></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Place of Supply:</strong></td>
+                        <td><?php echo date('h:i A', strtotime($sale_details['created_at'])); ?></td>
+                        <td><strong>Payment Status:</strong></td>
+                        <td>
+                            <span class="payment-status status-<?php echo $sale_details['payment_status']; ?>">
+                                <?php 
+                                if($sale_details['payment_status'] == 'paid') echo 'PAID';
+                                elseif($sale_details['payment_status'] == 'partial') echo 'PARTIAL';
+                                else echo 'PENDING';
+                                ?>
                             </span>
-                        <?php else: ?>
-                            <span class="text-muted">Not provided</span>
-                        <?php endif; ?>
-                    </td>
-                </tr>
-                <?php if(!empty($sale_details['address'])): ?>
-                <tr>
-                    <td><strong>Address:</strong></td>
-                    <td><?php echo nl2br(htmlspecialchars($sale_details['address'])); ?></td>
-                </tr>
-                <?php endif; ?>
-            </table>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+            <div class="customer-details">
+                <h5><i class="bi bi-person"></i> Customer Details</h5>
+                <table style="width: 100%;">
+                    <tr>
+                        <td style="width: 150px;"><strong>Customer Name:</strong></td>
+                        <td><?php echo htmlspecialchars($sale_details['customer_name'] ?? 'Walk-in Customer'); ?></td>
+                    </tr>
+                    <?php if(!empty($sale_details['phone'])): ?>
+                    <tr>
+                        <td><strong>Phone No:</strong></td>
+                        <td><?php echo htmlspecialchars($sale_details['phone']); ?></td>
+                    </tr>
+                    <?php endif; ?>
+                    <?php if(!empty($sale_details['email'])): ?>
+                    <tr>
+                        <td><strong>Email:</strong></td>
+                        <td><?php echo htmlspecialchars($sale_details['email']); ?></td>
+                    </tr>
+                    <?php endif; ?>
+                    <!-- Vehicle Registration - FIXED: Now shows vehicle number -->
+                    <tr>
+                        <td><strong>Vehicle Reg No:</strong></td>
+                        <td>
+                            <?php if(!empty($sale_details['vehicle_registration'])): ?>
+                                <span class="vehicle-badge">
+                                    <i class="bi bi-bicycle"></i> <?php echo htmlspecialchars($sale_details['vehicle_registration']); ?>
+                                </span>
+                            <?php else: ?>
+                                <span class="text-muted">Not provided</span>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+                    <?php if(!empty($sale_details['address'])): ?>
+                    <tr>
+                        <td><strong>Address:</strong></td>
+                        <td><?php echo nl2br(htmlspecialchars($sale_details['address'])); ?></td>
+                    </tr>
+                    <?php endif; ?>
+                </table>
+            </div>
         </div>
 
         <!-- Items Table -->
@@ -317,10 +354,10 @@ while($row = mysqli_fetch_assoc($settings_result)) {
                 <?php endwhile; ?>
             </tbody>
             <tfoot>
-                <tr>
+                <!--<tr>
                     <td colspan="5" class="text-end"><strong>Subtotal:</strong></td>
                     <td class="text-end">₹<?php echo number_format($subtotal, 2); ?></td>
-                </tr>
+                </tr>-->
                 <tr>
                     <td colspan="5" class="text-end"><strong>CGST @0%:</strong></td>
                     <td class="text-end">₹0.00</td>
@@ -349,44 +386,48 @@ while($row = mysqli_fetch_assoc($settings_result)) {
         <!-- Amount in Words -->
         <div class="mt-3">
             <strong>Amount in Words:</strong> 
-            <?php
-            $f = new NumberFormatter("en", NumberFormatter::SPELLOUT);
-            echo ucwords($f->format($sale_details['total_amount'])) . " Rupees Only";
-            ?>
+                <?php
+                // Safely generate amount-in-words. Use NumberFormatter when available,
+                // otherwise fall back to a simple converter for integers.
+                $amount = floatval($sale_details['total_amount'] ?? 0);
+                $integerPart = intval(floor($amount));
+                $fractionPart = round(($amount - $integerPart) * 100);
+
+                if (class_exists('NumberFormatter')) {
+                    try {
+                        $f = new NumberFormatter("en", NumberFormatter::SPELLOUT);
+                        $words = $f->format($integerPart);
+                    } catch (Exception $e) {
+                        $words = (string)$integerPart;
+                    }
+                } else {
+                    // Simple fallback for number to words (supports up to billions)
+                    function _num2words($n) {
+                        $units = ["", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"];
+                        $tens = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
+
+                        if ($n < 20) return $units[$n];
+                        if ($n < 100) return $tens[intval($n/10)] . ($n%10 ? ' ' . $units[$n%10] : '');
+                        if ($n < 1000) return _num2words(intval($n/100)) . ' hundred' . ($n%100 ? ' ' . _num2words($n%100) : '');
+                        if ($n < 1000000) return _num2words(intval($n/1000)) . ' thousand' . ($n%1000 ? ' ' . _num2words($n%1000) : '');
+                        if ($n < 1000000000) return _num2words(intval($n/1000000)) . ' million' . ($n%1000000 ? ' ' . _num2words($n%1000000) : '');
+                        return (string)$n;
+                    }
+                    $words = _num2words($integerPart);
+                }
+
+                $words = $words ? ucwords($words) : 'Zero';
+                if ($fractionPart > 0) {
+                    // include paise if any
+                    $words .= ' and ' . ($fractionPart) . '/100';
+                }
+                echo $words . " Rupees Only";
+                ?>
         </div>
 
-        <!-- Payment Details -->
-        <?php if($payment_summary['payment_count'] > 0): ?>
-        <div class="mt-3">
-            <strong>Payment Details:</strong>
-            <table class="table table-sm table-bordered mt-2" style="width: 50%;">
-                <thead>
-                    <tr>
-                        <th>Payment Count</th>
-                        <th>Total Paid</th>
-                        <th>Payment Method</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td><?php echo $payment_summary['payment_count']; ?></td>
-                        <td>₹<?php echo number_format($payment_summary['total_paid'], 2); ?></td>
-                        <td><?php echo ucfirst($sale_details['payment_method']); ?></td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
-        <?php endif; ?>
 
-        <!-- Terms and Conditions -->
-        <div class="mt-4">
-            <strong>Terms & Conditions:</strong>
-            <ul class="text-muted small">
-                <li>Goods once sold will not be taken back.</li>
-                <li>All disputes subject to local jurisdiction.</li>
-                <li>This is a computer generated invoice - no signature required.</li>
-            </ul>
-        </div>
+
+
 
         <!-- Footer -->
         <div class="footer-note">

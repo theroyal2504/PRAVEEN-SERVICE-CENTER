@@ -12,51 +12,83 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['add_purchase'])) {
     $invoice_number = mysqli_real_escape_string($conn, $_POST['invoice_number']);
     $created_by = $_SESSION['user_id'];
     
-    // Insert purchase
-    $query = "INSERT INTO purchases (supplier_id, purchase_date, invoice_number, created_by) 
-              VALUES ($supplier_id, '$purchase_date', '$invoice_number', $created_by)";
-    mysqli_query($conn, $query);
-    $purchase_id = mysqli_insert_id($conn);
+    // Start transaction
+    mysqli_begin_transaction($conn);
     
-    // Insert purchase items
-    $part_ids = $_POST['part_id'];
-    $quantities = $_POST['quantity'];
-    $purchase_prices = $_POST['purchase_price'];
-    $selling_prices = $_POST['selling_price'];
-    
-    $total_amount = 0;
-    
-    for ($i = 0; $i < count($part_ids); $i++) {
-        if (!empty($part_ids[$i]) && $quantities[$i] > 0) {
-            $part_id = $part_ids[$i];
-            $quantity = $quantities[$i];
-            $purchase_price = $purchase_prices[$i];
-            $selling_price = $selling_prices[$i];
-            
-            $item_query = "INSERT INTO purchase_items (purchase_id, part_id, quantity, purchase_price, selling_price) 
-                          VALUES ($purchase_id, $part_id, $quantity, $purchase_price, $selling_price)";
-            mysqli_query($conn, $item_query);
-            
-            $total_amount += $quantity * $purchase_price;
-            
-            // Update stock
-            $stock_query = "UPDATE stock SET quantity = quantity + $quantity WHERE part_id = $part_id";
-            mysqli_query($conn, $stock_query);
+    try {
+        // Insert purchase
+        $query = "INSERT INTO purchases (supplier_id, purchase_date, invoice_number, created_by) 
+                  VALUES ($supplier_id, '$purchase_date', '$invoice_number', $created_by)";
+        mysqli_query($conn, $query);
+        $purchase_id = mysqli_insert_id($conn);
+        
+        // Insert purchase items
+        $part_ids = $_POST['part_id'];
+        $quantities = $_POST['quantity'];
+        $purchase_prices = $_POST['purchase_price'];
+        $selling_prices = $_POST['selling_price'];
+        
+        $total_amount = 0;
+        
+        for ($i = 0; $i < count($part_ids); $i++) {
+            if (!empty($part_ids[$i]) && $quantities[$i] > 0) {
+                $part_id = $part_ids[$i];
+                $quantity = $quantities[$i];
+                $purchase_price = $purchase_prices[$i];
+                $selling_price = $selling_prices[$i];
+                
+                $item_query = "INSERT INTO purchase_items (purchase_id, part_id, quantity, purchase_price, selling_price) 
+                              VALUES ($purchase_id, $part_id, $quantity, $purchase_price, $selling_price)";
+                mysqli_query($conn, $item_query);
+                
+                $total_amount += $quantity * $purchase_price;
+                
+                // Update stock
+                $stock_query = "UPDATE stock SET quantity = quantity + $quantity WHERE part_id = $part_id";
+                mysqli_query($conn, $stock_query);
+            }
         }
+        
+        // Update total amount in purchase
+        mysqli_query($conn, "UPDATE purchases SET total_amount = $total_amount WHERE id = $purchase_id");
+        
+        mysqli_commit($conn);
+        $_SESSION['success'] = "Purchase added successfully!";
+        
+    } catch (Exception $e) {
+        mysqli_rollback($conn);
+        $_SESSION['error'] = "Error: " . $e->getMessage();
     }
     
-    // Update total amount in purchase
-    mysqli_query($conn, "UPDATE purchases SET total_amount = $total_amount WHERE id = $purchase_id");
-    
-    $_SESSION['success'] = "Purchase added successfully!";
     redirect('purchases.php');
 }
 
 // Fetch data for dropdowns
 $suppliers = mysqli_query($conn, "SELECT * FROM suppliers ORDER BY supplier_name");
-$parts = mysqli_query($conn, "SELECT p.*, s.quantity as current_stock FROM parts_master p LEFT JOIN stock s ON p.id = s.part_id ORDER BY p.part_name");
 
-// Fetch recent purchases - both admin and staff can view
+// Fetch categories
+$categories = mysqli_query($conn, "SELECT * FROM categories ORDER BY category_name");
+
+// Fetch parts with category information
+$parts_query = "SELECT p.*, s.quantity as current_stock, c.category_name, c.id as category_id
+                FROM parts_master p 
+                LEFT JOIN stock s ON p.id = s.part_id 
+                LEFT JOIN categories c ON p.category_id = c.id 
+                ORDER BY c.category_name, p.part_name";
+$parts = mysqli_query($conn, $parts_query);
+
+// Group parts by category for JavaScript
+$parts_by_category = [];
+$parts_result = mysqli_query($conn, $parts_query);
+while($part = mysqli_fetch_assoc($parts_result)) {
+    $cat_name = $part['category_name'] ?? 'Uncategorized';
+    if (!isset($parts_by_category[$cat_name])) {
+        $parts_by_category[$cat_name] = [];
+    }
+    $parts_by_category[$cat_name][] = $part;
+}
+
+// Fetch recent purchases
 $purchases = mysqli_query($conn, "SELECT p.*, s.supplier_name, u.username 
                                   FROM purchases p 
                                   LEFT JOIN suppliers s ON p.supplier_id = s.id 
@@ -71,12 +103,54 @@ $purchases = mysqli_query($conn, "SELECT p.*, s.supplier_name, u.username
     <title>Purchases - Bike Management System</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css">
+    <style>
+        .category-select {
+            background-color: #f8f9fa;
+            border-left: 3px solid #007bff;
+        }
+        .part-select {
+            border-left: 3px solid #28a745;
+        }
+        .category-badge {
+            background-color: #6c757d;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            margin-left: 5px;
+        }
+        .item-row {
+            transition: all 0.3s ease;
+        }
+        .item-row:hover {
+            background-color: #f5f5f5;
+        }
+        optgroup {
+            font-weight: bold;
+            color: #495057;
+            background-color: #e9ecef;
+            font-size: 1.1em;
+        }
+        optgroup option {
+            padding-left: 20px;
+            font-weight: normal;
+            color: #212529;
+        }
+        .category-filter {
+            margin-bottom: 15px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }
+    </style>
+    <!-- Add Select2 for better search -->
+    <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
 </head>
 <body>
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
         <div class="container-fluid">
             <a class="navbar-brand" href="dashboard.php">
-                <i class="bi bi-bicycle"></i> Bike Management System
+                <i class="bi bi-bicycle"></i> PRAVEEN SERVICE CENTER
             </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
@@ -114,11 +188,21 @@ $purchases = mysqli_query($conn, "SELECT p.*, s.supplier_name, u.username
             </div>
         <?php endif; ?>
 
+        <?php if (isset($_SESSION['error'])): ?>
+            <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                <?php 
+                echo $_SESSION['error']; 
+                unset($_SESSION['error']);
+                ?>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        <?php endif; ?>
+
         <div class="row">
             <div class="col-12">
                 <div class="card">
-                    <div class="card-header">
-                        <h5 class="mb-0">New Purchase Entry</h5>
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="mb-0"><i class="bi bi-cart-plus"></i> New Purchase Entry</h5>
                     </div>
                     <div class="card-body">
                         <form method="POST" id="purchaseForm">
@@ -148,44 +232,54 @@ $purchases = mysqli_query($conn, "SELECT p.*, s.supplier_name, u.username
                                 </div>
                             </div>
                             
+                            <!-- Category-wise Part Selection Section -->
+                            
+                            
                             <div class="table-responsive">
                                 <table class="table table-bordered" id="itemsTable">
-                                    <thead>
+                                    <thead class="table-dark">
                                         <tr>
-                                            <th>Part</th>
-                                            <th>Quantity</th>
-                                            <th>Purchase Price</th>
-                                            <th>Selling Price</th>
-                                            <th>Total</th>
-                                            <th>Action</th>
+                                            <th width="15%">Category</th>
+                                            <th width="25%">Part</th>
+                                            <th width="10%">Quantity</th>
+                                            <th width="15%">Purchase Price</th>
+                                            <th width="15%">Selling Price</th>
+                                            <th width="10%">Total</th>
+                                            <th width="10%">Action</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        <tr>
+                                        <tr class="item-row">
                                             <td>
-                                                <select class="form-control part-select" name="part_id[]" required>
-                                                    <option value="">Select Part</option>
+                                                <select class="form-control category-select" onchange="filterPartsByCategory(this)">
+                                                    <option value="">Select Category</option>
                                                     <?php 
-                                                    mysqli_data_seek($parts, 0);
-                                                    while($part = mysqli_fetch_assoc($parts)): 
+                                                    mysqli_data_seek($categories, 0);
+                                                    while($cat = mysqli_fetch_assoc($categories)): 
                                                     ?>
-                                                    <option value="<?php echo $part['id']; ?>" data-price="<?php echo $part['unit_price']; ?>">
-                                                        <?php echo htmlspecialchars($part['part_name'] . ' (' . $part['part_number'] . ') - Stock: ' . ($part['current_stock'] ?? 0)); ?>
+                                                    <option value="<?php echo htmlspecialchars($cat['category_name']); ?>">
+                                                        <?php echo htmlspecialchars($cat['category_name']); ?>
                                                     </option>
                                                     <?php endwhile; ?>
+                                                    <option value="Uncategorized">Uncategorized</option>
                                                 </select>
                                             </td>
-                                            <td><input type="number" class="form-control quantity" name="quantity[]" min="1" required></td>
-                                            <td><input type="number" step="0.01" class="form-control purchase-price" name="purchase_price[]" required></td>
-                                            <td><input type="number" step="0.01" class="form-control selling-price" name="selling_price[]" required></td>
+                                            <td>
+                                                <select class="form-control part-select" name="part_id[]" required disabled>
+                                                    <option value="">First select category</option>
+                                                </select>
+                                            </td>
+                                            <td><input type="number" class="form-control quantity" name="quantity[]" min="1" required disabled></td>
+                                            <td><input type="number" step="0.01" class="form-control purchase-price" name="purchase_price[]" required disabled></td>
+                                            <td><input type="number" step="0.01" class="form-control selling-price" name="selling_price[]" required disabled></td>
                                             <td><input type="text" class="form-control row-total" readonly></td>
                                             <td><button type="button" class="btn btn-danger btn-sm remove-row"><i class="bi bi-trash"></i></button></td>
                                         </tr>
                                     </tbody>
                                     <tfoot>
-                                        <tr>
-                                            <td colspan="4" class="text-end"><strong>Grand Total:</strong></td>
-                                            <td><input type="text" class="form-control" id="grandTotal" readonly></td>
+                                        <tr class="table-info">
+                                            <td colspan="5" class="text-end"><strong>Grand Total:</strong></td>
+                                            <td><input type="text" class="form-control" id="grandTotal" readonly style="font-weight:bold;"></td>
                                             <td></td>
                                         </tr>
                                     </tfoot>
@@ -198,6 +292,9 @@ $purchases = mysqli_query($conn, "SELECT p.*, s.supplier_name, u.username
                             <button type="submit" name="add_purchase" class="btn btn-primary">
                                 <i class="bi bi-save"></i> Save Purchase
                             </button>
+                            <button type="reset" class="btn btn-secondary">
+                                <i class="bi bi-arrow-counterclockwise"></i> Reset
+                            </button>
                         </form>
                     </div>
                 </div>
@@ -207,13 +304,13 @@ $purchases = mysqli_query($conn, "SELECT p.*, s.supplier_name, u.username
         <div class="row mt-4">
             <div class="col-12">
                 <div class="card">
-                    <div class="card-header">
-                        <h5 class="mb-0">Recent Purchases</h5>
+                    <div class="card-header bg-success text-white">
+                        <h5 class="mb-0"><i class="bi bi-clock-history"></i> Recent Purchases</h5>
                     </div>
                     <div class="card-body">
                         <div class="table-responsive">
                             <table class="table table-bordered table-striped">
-                                <thead>
+                                <thead class="table-dark">
                                     <tr>
                                         <th>Date</th>
                                         <th>Invoice #</th>
@@ -227,7 +324,7 @@ $purchases = mysqli_query($conn, "SELECT p.*, s.supplier_name, u.username
                                     <?php while($purchase = mysqli_fetch_assoc($purchases)): ?>
                                     <tr>
                                         <td><?php echo date('d-m-Y', strtotime($purchase['purchase_date'])); ?></td>
-                                        <td><?php echo htmlspecialchars($purchase['invoice_number']); ?></td>
+                                        <td><strong><?php echo htmlspecialchars($purchase['invoice_number']); ?></strong></td>
                                         <td><?php echo htmlspecialchars($purchase['supplier_name']); ?></td>
                                         <td>₹<?php echo number_format($purchase['total_amount'], 2); ?></td>
                                         <td><?php echo htmlspecialchars($purchase['username']); ?></td>
@@ -247,9 +344,96 @@ $purchases = mysqli_query($conn, "SELECT p.*, s.supplier_name, u.username
         </div>
     </div>
 
+    <!-- Include jQuery and Select2 -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    
     <script>
+    // Parts data by category from PHP
+    const partsByCategory = <?php echo json_encode($parts_by_category); ?>;
+
+    // Function to filter parts based on selected category
+    function filterPartsByCategory(categorySelect) {
+        const row = categorySelect.closest('tr');
+        const partSelect = row.querySelector('.part-select');
+        const category = categorySelect.value;
+        
+        // Clear existing options
+        partSelect.innerHTML = '';
+        
+        if (category) {
+            // Add default option
+            const defaultOption = document.createElement('option');
+            defaultOption.value = '';
+            defaultOption.textContent = 'Select Part';
+            partSelect.appendChild(defaultOption);
+            
+            // Add parts for selected category
+            const parts = partsByCategory[category] || [];
+            parts.forEach(part => {
+                const option = document.createElement('option');
+                option.value = part.id;
+                option.textContent = part.part_name;
+                option.dataset.price = part.unit_price;
+                option.dataset.stock = part.current_stock;
+                partSelect.appendChild(option);
+            });
+            
+            // Enable part select and dependent fields
+            partSelect.disabled = false;
+            row.querySelector('.quantity').disabled = false;
+            row.querySelector('.purchase-price').disabled = false;
+            row.querySelector('.selling-price').disabled = false;
+        } else {
+            // Disable part select and dependent fields
+            partSelect.disabled = true;
+            row.querySelector('.quantity').disabled = true;
+            row.querySelector('.purchase-price').disabled = true;
+            row.querySelector('.selling-price').disabled = true;
+            
+            // Clear values
+            row.querySelector('.quantity').value = '';
+            row.querySelector('.purchase-price').value = '';
+            row.querySelector('.selling-price').value = '';
+        }
+    }
+
     document.addEventListener('DOMContentLoaded', function() {
+        // Initialize Select2 on all part selects
+        $('.part-select').select2({
+            placeholder: "Search for a part...",
+            allowClear: true,
+            width: '100%'
+        });
+
+        // Category filter functionality
+        $('#category_filter').on('change', function() {
+            const selectedCategory = $(this).val();
+            
+            $('.category-select').each(function() {
+                if (selectedCategory === 'all') {
+                    $(this).val('').trigger('change');
+                } else {
+                    $(this).val(selectedCategory).trigger('change');
+                }
+            });
+        });
+
+        // Search input functionality
+        $('#part_search').on('keyup', function() {
+            const searchTerm = $(this).val().toLowerCase();
+            
+            $('.part-select option').each(function() {
+                const optionText = $(this).text().toLowerCase();
+                if (optionText.includes(searchTerm) || searchTerm === '') {
+                    $(this).show();
+                } else {
+                    $(this).hide();
+                }
+            });
+        });
+
         // Add new row
         document.getElementById('addRow').addEventListener('click', function() {
             const tbody = document.querySelector('#itemsTable tbody');
@@ -257,14 +441,41 @@ $purchases = mysqli_query($conn, "SELECT p.*, s.supplier_name, u.username
             
             // Clear input values
             newRow.querySelectorAll('input').forEach(input => {
-                if (input.type !== 'button') input.value = '';
+                if (input.type !== 'button') {
+                    input.value = '';
+                }
             });
             
-            // Reset select
-            const select = newRow.querySelector('select');
-            if (select) select.selectedIndex = 0;
+            // Reset selects
+            const categorySelect = newRow.querySelector('.category-select');
+            categorySelect.selectedIndex = 0;
+            
+            const partSelect = newRow.querySelector('.part-select');
+            partSelect.innerHTML = '<option value="">First select category</option>';
+            partSelect.disabled = true;
+            
+            // Disable dependent fields
+            newRow.querySelector('.quantity').disabled = true;
+            newRow.querySelector('.purchase-price').disabled = true;
+            newRow.querySelector('.selling-price').disabled = true;
+            
+            // Add remove button event
+            const removeBtn = newRow.querySelector('.remove-row');
+            removeBtn.addEventListener('click', function() {
+                if (tbody.rows.length > 1) {
+                    this.closest('tr').remove();
+                    calculateGrandTotal();
+                }
+            });
             
             tbody.appendChild(newRow);
+            
+            // Initialize Select2 on new part select
+            $(partSelect).select2({
+                placeholder: "Search for a part...",
+                allowClear: true,
+                width: '100%'
+            });
         });
         
         // Remove row
@@ -278,27 +489,30 @@ $purchases = mysqli_query($conn, "SELECT p.*, s.supplier_name, u.username
             }
         });
         
-        // Calculate row total
-        document.addEventListener('input', function(e) {
-            if (e.target.classList.contains('quantity') || e.target.classList.contains('purchase-price')) {
-                const row = e.target.closest('tr');
-                const quantity = row.querySelector('.quantity').value || 0;
-                const price = row.querySelector('.purchase-price').value || 0;
-                const total = quantity * price;
-                row.querySelector('.row-total').value = total.toFixed(2);
-                calculateGrandTotal();
-            }
-        });
-        
-        // Auto-fill selling price from part selection
+        // Handle part selection to auto-fill selling price
         document.addEventListener('change', function(e) {
             if (e.target.classList.contains('part-select')) {
                 const selected = e.target.options[e.target.selectedIndex];
-                const price = selected.dataset.price;
-                if (price) {
-                    const row = e.target.closest('tr');
-                    row.querySelector('.selling-price').value = price;
+                const row = e.target.closest('tr');
+                
+                if (selected.value) {
+                    const price = selected.dataset.price;
+                    if (price) {
+                        row.querySelector('.selling-price').value = price;
+                    }
                 }
+            }
+        });
+        
+        // Calculate row total on quantity or purchase price change
+        document.addEventListener('input', function(e) {
+            if (e.target.classList.contains('quantity') || e.target.classList.contains('purchase-price')) {
+                const row = e.target.closest('tr');
+                const quantity = parseFloat(row.querySelector('.quantity').value) || 0;
+                const price = parseFloat(row.querySelector('.purchase-price').value) || 0;
+                const total = quantity * price;
+                row.querySelector('.row-total').value = total.toFixed(2);
+                calculateGrandTotal();
             }
         });
         
@@ -307,8 +521,29 @@ $purchases = mysqli_query($conn, "SELECT p.*, s.supplier_name, u.username
             document.querySelectorAll('.row-total').forEach(input => {
                 grandTotal += parseFloat(input.value) || 0;
             });
-            document.getElementById('grandTotal').value = grandTotal.toFixed(2);
+            document.getElementById('grandTotal').value = '₹' + grandTotal.toFixed(2);
         }
+        
+        // Form validation before submit
+        document.getElementById('purchaseForm').addEventListener('submit', function(e) {
+            const rows = document.querySelectorAll('#itemsTable tbody tr');
+            let hasValidItems = false;
+            
+            rows.forEach(row => {
+                const partSelect = row.querySelector('.part-select');
+                const quantity = parseFloat(row.querySelector('.quantity').value) || 0;
+                
+                if (partSelect.value && quantity > 0) {
+                    hasValidItems = true;
+                }
+            });
+            
+            if (!hasValidItems) {
+                e.preventDefault();
+                alert('Please add at least one valid item to the purchase');
+                return false;
+            }
+        });
     });
     </script>
 </body>
