@@ -118,17 +118,24 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['add_sale'])) {
     }
 }
 
-// Fetch data for dropdowns
+// Fetch categories
+$categories = mysqli_query($conn, "SELECT * FROM categories ORDER BY category_name");
+
+// Fetch parts with category information - UPDATED to include category for grouping
+$parts_query = "SELECT p.*, s.quantity as current_stock, c.category_name, c.id as category_id
+                FROM parts_master p 
+                JOIN stock s ON p.id = s.part_id 
+                LEFT JOIN categories c ON p.category_id = c.id
+                WHERE s.quantity > 0 
+                ORDER BY c.category_name, p.part_name";
+$parts = mysqli_query($conn, $parts_query);
+
+// Fetch customers
 $customers = mysqli_query($conn, "SELECT c.*, bm.model_name, bc.name as company_name 
                                   FROM customers c
                                   LEFT JOIN bike_models bm ON c.vehicle_model_id = bm.id
                                   LEFT JOIN bike_companies bc ON bm.company_id = bc.id
                                   ORDER BY c.customer_name");
-$parts = mysqli_query($conn, "SELECT p.*, s.quantity as current_stock 
-                              FROM parts_master p 
-                              JOIN stock s ON p.id = s.part_id 
-                              WHERE s.quantity > 0 
-                              ORDER BY p.part_name");
 
 // Fetch recent sales with vehicle info
 $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registration, u.username,
@@ -179,13 +186,36 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
             margin-top: 10px;
             padding-top: 10px;
         }
+        .category-badge {
+            background-color: #6c757d;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            margin-left: 5px;
+        }
+        optgroup {
+            font-weight: bold;
+            color: #495057;
+            background-color: #e9ecef;
+            font-size: 1.1em;
+        }
+        optgroup option {
+            padding-left: 20px;
+            font-weight: normal;
+            color: #212529;
+            font-size: 1em;
+        }
+        .part-select option {
+            padding: 5px;
+        }
     </style>
 </head>
 <body>
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
         <div class="container-fluid">
             <a class="navbar-brand" href="dashboard.php">
-                <i class="bi bi-bicycle"></i> Bike Management System
+                <i class="bi bi-bicycle"></i> PRAVEEN SERVICE CENTER
             </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
@@ -242,9 +272,9 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                     <div class="card-body">
                         <form method="POST" id="saleForm">
                             <!-- Customer Selection Section -->
-                            <div class="row mb-4">
+                            <div class="row mb-2">
                                 <div class="col-12">
-                                    <div class="card bg-light">
+                                    <div class="card bg-light" style="margin-bottom:0;">
                                         <div class="card-header">
                                             <ul class="nav nav-tabs card-header-tabs" id="customerTab" role="tablist">
                                                 <li class="nav-item" role="presentation">
@@ -255,15 +285,15 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                                                 </li>
                                             </ul>
                                         </div>
-                                        <div class="card-body">
+                                        <div class="card-body p-2">
                                             <div class="tab-content">
                                                 <!-- Existing Customer Tab -->
                                                 <div class="tab-pane fade show active" id="existing-customer" role="tabpanel">
                                                     <div class="row">
                                                         <div class="col-md-8">
-                                                            <div class="mb-3">
+                                                            <div class="mb-2">
                                                                 <label for="customer_id" class="form-label">Select Customer</label>
-                                                                <select class="form-control" id="customer_id" name="customer_id" onchange="loadCustomerVehicle()">
+                                                                <select class="form-control form-control-sm" id="customer_id" name="customer_id" onchange="loadCustomerVehicle()">
                                                                     <option value="">Walk-in Customer</option>
                                                                     <?php 
                                                                     mysqli_data_seek($customers, 0);
@@ -283,9 +313,9 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                                                             </div>
                                                         </div>
                                                         <div class="col-md-4">
-                                                            <div class="mb-3">
+                                                            <div class="mb-2">
                                                                 <label for="existing_vehicle" class="form-label">Vehicle Registration</label>
-                                                                <input type="text" class="form-control" id="existing_vehicle" name="vehicle_registration" 
+                                                                <input type="text" class="form-control form-control-sm" id="existing_vehicle" name="vehicle_registration" 
                                                                        placeholder="Enter manually if different" style="text-transform:uppercase">
                                                                 <small class="text-muted">Auto-fills from selected customer</small>
                                                             </div>
@@ -300,26 +330,26 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                                                 <div class="tab-pane fade" id="new-customer" role="tabpanel">
                                                     <div class="row">
                                                         <div class="col-md-4">
-                                                            <div class="mb-3">
+                                                            <div class="mb-2">
                                                                 <label for="new_customer_name" class="form-label">Customer Name *</label>
-                                                                <input type="text" class="form-control" id="new_customer_name" name="new_customer_name">
+                                                                <input type="text" class="form-control form-control-sm" id="new_customer_name" name="new_customer_name">
                                                             </div>
                                                         </div>
                                                         <div class="col-md-3">
-                                                            <div class="mb-3">
+                                                            <div class="mb-2">
                                                                 <label for="new_customer_phone" class="form-label">Phone Number *</label>
-                                                                <input type="text" class="form-control" id="new_customer_phone" name="new_customer_phone">
+                                                                <input type="text" class="form-control form-control-sm" id="new_customer_phone" name="new_customer_phone">
                                                             </div>
                                                         </div>
                                                         <div class="col-md-3">
-                                                            <div class="mb-3">
+                                                            <div class="mb-2">
                                                                 <label for="new_vehicle_registration" class="form-label">Vehicle Registration</label>
-                                                                <input type="text" class="form-control" id="new_vehicle_registration" name="new_vehicle_registration" 
+                                                                <input type="text" class="form-control form-control-sm" id="new_vehicle_registration" name="new_vehicle_registration" 
                                                                        placeholder="e.g., MH12AB1234" style="text-transform:uppercase">
                                                             </div>
                                                         </div>
                                                         <div class="col-md-2">
-                                                            <div class="mb-3">
+                                                            <div class="mb-2">
                                                                 <label class="form-label">&nbsp;</label>
                                                                 <div class="form-check">
                                                                     <input class="form-check-input" type="checkbox" id="new_customer" name="new_customer" value="1">
@@ -373,12 +403,12 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                                 </div>
                             </div>
                             
-                            <!-- Items Table -->
+                            <!-- Items Table with Category-wise Grouped Parts - Only Name Shown -->
                             <div class="table-responsive">
                                 <table class="table table-bordered" id="itemsTable">
                                     <thead class="table-dark">
                                         <tr>
-                                            <th width="30%">Part</th>
+                                            <th width="30%">Part <span class="category-badge">Grouped by Category</span></th>
                                             <th width="10%">Available Stock</th>
                                             <th width="10%">Quantity</th>
                                             <th width="15%">Selling Price (₹)</th>
@@ -389,18 +419,32 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                                     <tbody>
                                         <tr class="item-row">
                                             <td>
-                                                <select class="form-control part-select" name="part_id[]" required>
+                                                <select class="form-control part-select" name="part_id[]" required style="width: 100%;">
                                                     <option value="">Select Part</option>
                                                     <?php 
+                                                    // Group options by category for better organization
+                                                    $current_category = '';
                                                     mysqli_data_seek($parts, 0);
                                                     while($part = mysqli_fetch_assoc($parts)): 
+                                                        $part_category = $part['category_name'] ?? 'Uncategorized';
+                                                        if ($current_category != $part_category) {
+                                                            if ($current_category != '') echo '</optgroup>';
+                                                            echo '<optgroup label="' . htmlspecialchars($part_category) . '">';
+                                                            $current_category = $part_category;
+                                                        }
                                                     ?>
-                                                    <option value="<?php echo $part['id']; ?>" 
-                                                            data-price="<?php echo $part['unit_price']; ?>"
-                                                            data-stock="<?php echo $part['current_stock']; ?>">
-                                                        <?php echo htmlspecialchars($part['part_name'] . ' (' . $part['part_number'] . ')'); ?>
-                                                    </option>
-                                                    <?php endwhile; ?>
+                                                        <option value="<?php echo $part['id']; ?>" 
+                                                                data-price="<?php echo $part['unit_price']; ?>"
+                                                                data-stock="<?php echo $part['current_stock']; ?>">
+                                                            <?php 
+                                                            // Show ONLY the part name without part number and stock
+                                                            echo htmlspecialchars($part['part_name']); 
+                                                            ?>
+                                                        </option>
+                                                    <?php 
+                                                    endwhile; 
+                                                    if ($current_category != '') echo '</optgroup>';
+                                                    ?>
                                                 </select>
                                             </td>
                                             <td><input type="text" class="form-control available-stock" readonly></td>
