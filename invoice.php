@@ -3,6 +3,7 @@ require_once 'config.php';
 
 if (!isLoggedIn()) {
     redirect('index.php');
+
 }
 
 $sale_id = $_GET['id'] ?? 0;

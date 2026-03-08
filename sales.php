@@ -15,6 +15,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['add_sale'])) {
     $sale_date = $_POST['sale_date'];
     $invoice_number = mysqli_real_escape_string($conn, $_POST['invoice_number']);
     $payment_method = $_POST['payment_method'];
+    $discount_type = $_POST['discount_type'] ?? 'fixed';
+    $discount_value = floatval($_POST['discount_value'] ?? 0);
     $paid_amount = floatval($_POST['paid_amount'] ?? 0);
     $created_by = $_SESSION['user_id'];
     
@@ -36,8 +38,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['add_sale'])) {
         }
         
         // Insert sale
-        $query = "INSERT INTO sales (customer_id, sale_date, invoice_number, payment_method, paid_amount, created_by) 
-                  VALUES ($customer_id, '$sale_date', '$invoice_number', '$payment_method', $paid_amount, $created_by)";
+        $query = "INSERT INTO sales (customer_id, sale_date, invoice_number, payment_method, discount_type, discount_value, paid_amount, created_by) 
+                  VALUES ($customer_id, '$sale_date', '$invoice_number', '$payment_method', '$discount_type', $discount_value, $paid_amount, $created_by)";
         mysqli_query($conn, $query);
         $sale_id = mysqli_insert_id($conn);
         
@@ -73,14 +75,29 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['add_sale'])) {
             }
         }
         
+        // Calculate discount amount
+        $discount_amount = 0;
+        if ($discount_type == 'percentage') {
+            $discount_amount = ($total_amount * $discount_value) / 100;
+        } else {
+            $discount_amount = $discount_value;
+        }
+        
+        // Ensure discount doesn't exceed total
+        if ($discount_amount > $total_amount) {
+            $discount_amount = $total_amount;
+        }
+        
+        $final_amount = $total_amount - $discount_amount;
+        
         // Calculate due amount and payment status
-        $due_amount = $total_amount - $paid_amount;
+        $due_amount = $final_amount - $paid_amount;
         $payment_status = 'paid';
         if ($due_amount > 0) {
             $payment_status = 'partial';
         } elseif ($due_amount < 0) {
-            // If paid amount exceeds total, adjust paid amount
-            $paid_amount = $total_amount;
+            // If paid amount exceeds final amount, adjust paid amount
+            $paid_amount = $final_amount;
             $due_amount = 0;
             $payment_status = 'paid';
         }
@@ -88,6 +105,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['add_sale'])) {
         // Update sale with total amount and payment status
         $update_query = "UPDATE sales SET 
                         total_amount = $total_amount,
+                        discount_amount = $discount_amount,
+                        final_amount = $final_amount,
                         paid_amount = $paid_amount,
                         due_amount = $due_amount,
                         payment_status = '$payment_status' 
@@ -121,8 +140,19 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['add_sale'])) {
 // Fetch categories
 $categories = mysqli_query($conn, "SELECT * FROM categories ORDER BY category_name");
 
-// Fetch parts with category information - UPDATED to include category for grouping
-$parts_query = "SELECT p.*, s.quantity as current_stock, c.category_name, c.id as category_id
+// Fetch parts with category information and latest selling price
+$parts_query = "SELECT 
+                    p.*, 
+                    s.quantity as current_stock, 
+                    c.category_name, 
+                    c.id as category_id,
+                    (
+                        SELECT pi.selling_price 
+                        FROM purchase_items pi 
+                        WHERE pi.part_id = p.id 
+                        ORDER BY pi.id DESC 
+                        LIMIT 1
+                    ) as latest_selling_price
                 FROM parts_master p 
                 JOIN stock s ON p.id = s.part_id 
                 LEFT JOIN categories c ON p.category_id = c.id
@@ -144,6 +174,23 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                               LEFT JOIN customers c ON s.customer_id = c.id 
                               LEFT JOIN users u ON s.created_by = u.id 
                               ORDER BY s.sale_date DESC LIMIT 50");
+
+// Build parts map for JavaScript
+$parts_map = [];
+$categories_list = [];
+mysqli_data_seek($parts, 0);
+while($p = mysqli_fetch_assoc($parts)) {
+    $cat = $p['category_name'] ?? 'Uncategorized';
+    if (!isset($parts_map[$cat])) {
+        $parts_map[$cat] = [];
+    }
+    // Use latest selling price if available
+    $p['selling_price'] = $p['latest_selling_price'] ?? $p['unit_price'];
+    $parts_map[$cat][] = $p;
+    if (!in_array($cat, $categories_list)) {
+        $categories_list[] = $cat;
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -158,22 +205,27 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
             background-color: #fff3cd;
             border: 2px solid #ffc107;
             font-weight: bold;
-            font-size: 1.2em;
         }
-        .due-positive {
-            color: #dc3545;
-            font-weight: bold;
-            background-color: #f8d7da;
+        .discount-section {
+            background-color: #e8f4f8;
+            border: 2px solid #17a2b8;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 10px 0;
         }
-        .due-zero {
-            color: #28a745;
+        .discount-input {
+            border: 2px solid #17a2b8;
             font-weight: bold;
-            background-color: #d4edda;
         }
         .grand-total {
             font-size: 1.2em;
             font-weight: bold;
             background-color: #cce5ff;
+        }
+        .final-total {
+            font-size: 1.2em;
+            font-weight: bold;
+            background-color: #d4edda;
         }
         .item-row {
             transition: all 0.3s ease;
@@ -193,21 +245,6 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
             border-radius: 4px;
             font-size: 0.8em;
             margin-left: 5px;
-        }
-        optgroup {
-            font-weight: bold;
-            color: #495057;
-            background-color: #e9ecef;
-            font-size: 1.1em;
-        }
-        optgroup option {
-            padding-left: 20px;
-            font-weight: normal;
-            color: #212529;
-            font-size: 1em;
-        }
-        .part-select option {
-            padding: 5px;
         }
     </style>
 </head>
@@ -397,13 +434,13 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                                 <div class="col-md-3">
                                     <div class="mb-3">
                                         <label for="paid_amount" class="form-label">Paid Amount (₹)</label>
-                                        <input type="number" step="0.01" class="form-control editable-paid" id="paid_amount" name="paid_amount" value="0" min="0">
-                                        <small class="text-muted">Edit this amount to calculate due</small>
+                                        <input type="number" step="0.01" class="form-control" id="paid_amount" name="paid_amount" value="0" min="0">
+                                        <small class="text-muted">Amount customer is paying</small>
                                     </div>
                                 </div>
                             </div>
                             
-                            <!-- Items Table with Category-wise Grouped Parts - Only Name Shown -->
+                            <!-- Items Table -->
                             <div class="table-responsive">
                                 <table class="table table-bordered" id="itemsTable">
                                     <thead class="table-dark">
@@ -419,22 +456,10 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                                     <tbody>
                                         <tr class="item-row">
                                             <td>
-                                                <?php
-                                                // Build parts map grouped by category for JS-driven category->part linkage
-                                                mysqli_data_seek($parts, 0);
-                                                $parts_map = [];
-                                                $categories = [];
-                                                while($p = mysqli_fetch_assoc($parts)) {
-                                                    $cat = $p['category_name'] ?? 'Uncategorized';
-                                                    if (!isset($parts_map[$cat])) $parts_map[$cat] = [];
-                                                    $parts_map[$cat][] = $p;
-                                                    if (!in_array($cat, $categories)) $categories[] = $cat;
-                                                }
-                                                ?>
                                                 <div class="d-flex align-items-center gap-2">
                                                     <select class="form-control form-control-sm category-select" style="flex:0 0 45%;">
                                                         <option value="">Category</option>
-                                                        <?php foreach($categories as $cat): ?>
+                                                        <?php foreach($categories_list as $cat): ?>
                                                             <option value="<?php echo htmlspecialchars($cat); ?>"><?php echo htmlspecialchars($cat); ?></option>
                                                         <?php endforeach; ?>
                                                     </select>
@@ -444,8 +469,8 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                                                 </div>
                                             </td>
                                             <td><input type="text" class="form-control available-stock" readonly></td>
-                                            <td><input type="number" class="form-control quantity" name="quantity[]" min="1" required></td>
-                                            <td><input type="number" step="0.01" class="form-control selling-price" name="selling_price[]" required></td>
+                                            <td><input type="number" class="form-control quantity" name="quantity[]" min="1" required disabled></td>
+                                            <td><input type="number" step="0.01" class="form-control selling-price" name="selling_price[]" required disabled></td>
                                             <td><input type="text" class="form-control row-total" readonly></td>
                                             <td><button type="button" class="btn btn-danger btn-sm remove-row"><i class="bi bi-trash"></i></button></td>
                                         </tr>
@@ -453,7 +478,7 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                                 </table>
                             </div>
                             
-                            <!-- Calculation Section -->
+                            <!-- Calculation Section with Discount -->
                             <div class="row calculation-row">
                                 <div class="col-md-6">
                                     <button type="button" class="btn btn-success" id="addRow">
@@ -468,8 +493,34 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                                         <div class="card-body">
                                             <table class="table table-sm table-borderless mb-0">
                                                 <tr>
-                                                    <td width="50%"><strong>Grand Total:</strong></td>
-                                                    <td><input type="text" class="form-control grand-total" id="grandTotal" readonly value="0.00" style="font-weight:bold; background-color:#e3f2fd; text-align:right;"></td>
+                                                    <td width="50%"><strong>Sub Total:</strong></td>
+                                                    <td><input type="text" class="form-control grand-total" id="subTotal" readonly value="0.00" style="font-weight:bold; background-color:#e3f2fd; text-align:right;"></td>
+                                                </tr>
+                                                
+                                                <!-- Discount Section -->
+                                                <tr class="discount-section">
+                                                    <td colspan="2" class="p-2">
+                                                        <div class="row">
+                                                            <div class="col-5">
+                                                                <select class="form-control form-control-sm" id="discount_type" name="discount_type">
+                                                                    <option value="fixed">Fixed (₹)</option>
+                                                                    <option value="percentage">Percentage (%)</option>
+                                                                </select>
+                                                            </div>
+                                                            <div class="col-4">
+                                                                <input type="number" step="0.01" class="form-control form-control-sm discount-input" id="discount_value" name="discount_value" value="0" min="0">
+                                                            </div>
+                                                            <div class="col-3">
+                                                                <span class="badge bg-info p-2" id="discount_display">₹0</span>
+                                                            </div>
+                                                        </div>
+                                                        <small class="text-muted">Discount will be applied to total</small>
+                                                    </td>
+                                                </tr>
+                                                
+                                                <tr>
+                                                    <td><strong>Grand Total:</strong></td>
+                                                    <td><input type="text" class="form-control grand-total" id="grandTotal" readonly value="0.00" style="font-weight:bold; background-color:#cce5ff; text-align:right;"></td>
                                                 </tr>
                                                 <tr>
                                                     <td><strong>Paid Amount:</strong></td>
@@ -501,7 +552,7 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
             </div>
         </div>
 
-        <!-- Recent Sales with Vehicle Info -->
+        <!-- Recent Sales Section -->
         <div class="row mt-4">
             <div class="col-12">
                 <div class="card">
@@ -518,6 +569,8 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                                         <th>Customer</th>
                                         <th>Vehicle</th>
                                         <th>Total</th>
+                                        <th>Discount</th>
+                                        <th>Final</th>
                                         <th>Paid</th>
                                         <th>Due</th>
                                         <th>Status</th>
@@ -525,7 +578,10 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <?php while($sale = mysqli_fetch_assoc($sales)): ?>
+                                    <?php while($sale = mysqli_fetch_assoc($sales)): 
+                                        $final_amount = $sale['final_amount'] ?? $sale['total_amount'];
+                                        $discount_amount = $sale['discount_amount'] ?? 0;
+                                    ?>
                                     <tr>
                                         <td><?php echo date('d-m-Y', strtotime($sale['sale_date'])); ?></td>
                                         <td><strong><?php echo htmlspecialchars($sale['invoice_number']); ?></strong></td>
@@ -538,6 +594,8 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                                             <?php endif; ?>
                                         </td>
                                         <td>₹<?php echo number_format($sale['total_amount'], 2); ?></td>
+                                        <td class="text-info">-₹<?php echo number_format($discount_amount, 2); ?></td>
+                                        <td class="text-primary">₹<?php echo number_format($final_amount, 2); ?></td>
                                         <td class="text-success">₹<?php echo number_format($sale['paid_amount'], 2); ?></td>
                                         <td class="text-<?php echo $sale['due_amount'] > 0 ? 'danger' : 'success'; ?>">
                                             ₹<?php echo number_format($sale['due_amount'], 2); ?>
@@ -566,11 +624,6 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                                                 <a href="invoice.php?id=<?php echo $sale['id']; ?>" class="btn btn-secondary" target="_blank" title="Print">
                                                     <i class="bi bi-printer"></i>
                                                 </a>
-                                                <?php if($sale['due_amount'] > 0): ?>
-                                                <a href="sale_view.php?id=<?php echo $sale['id']; ?>#payments" class="btn btn-warning" title="Collect">
-                                                    <i class="bi bi-cash"></i>
-                                                </a>
-                                                <?php endif; ?>
                                             </div>
                                         </td>
                                     </tr>
@@ -585,8 +638,9 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
     </div>
 
     <script>
-    // partsByCategory will be populated by PHP below
-    var partsByCategory = {};
+    // Parts data
+    var partsByCategory = <?php echo json_encode($parts_map); ?> || {};
+
     function loadCustomerVehicle() {
         const select = document.getElementById('customer_id');
         const selected = select.options[select.selectedIndex];
@@ -606,68 +660,62 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
             vehicleInfo.style.display = 'none';
         }
         
-        // Auto-fill new customer tab if needed
         if (selected.value) {
             document.getElementById('new_customer_name').value = selected.dataset.name || '';
             document.getElementById('new_customer_phone').value = selected.dataset.phone || '';
         }
     }
 
-    // Handle tab switching for validation
-    document.getElementById('existing-customer-tab').addEventListener('click', function() {
-        document.getElementById('new_customer').checked = false;
-    });
-    
-    document.getElementById('new-customer-tab').addEventListener('click', function() {
-        document.getElementById('new_customer').checked = true;
-    });
-
     document.addEventListener('DOMContentLoaded', function() {
         const paidAmountInput = document.getElementById('paid_amount');
+        const subTotalInput = document.getElementById('subTotal');
         const grandTotalInput = document.getElementById('grandTotal');
         const displayPaidAmount = document.getElementById('displayPaidAmount');
         const dueAmountInput = document.getElementById('dueAmount');
-        
-        // Function to update all calculations
-        function updateCalculations() {
-            calculateGrandTotal();
-            updateDueAmount();
-        }
+        const discountType = document.getElementById('discount_type');
+        const discountValue = document.getElementById('discount_value');
+        const discountDisplay = document.getElementById('discount_display');
 
-        // Debug: ensure partsByCategory is available and populate category selects
-        console.log('partsByCategory:', partsByCategory);
-        function populateCategorySelects() {
-            const cats = Object.keys(partsByCategory || {});
-            document.querySelectorAll('.category-select').forEach(sel => {
-                // remove existing non-default options
-                for (let i = sel.options.length - 1; i >= 1; i--) sel.remove(i);
-                cats.forEach(cat => {
-                    const opt = document.createElement('option');
-                    opt.value = cat;
-                    opt.textContent = cat;
-                    sel.appendChild(opt);
-                });
-            });
-        }
-        populateCategorySelects();
-        
-        // Calculate grand total from all rows
-        function calculateGrandTotal() {
-            let grandTotal = 0;
+        function calculateAll() {
+            // Calculate subtotal from items
+            let subTotal = 0;
             document.querySelectorAll('.row-total').forEach(input => {
-                grandTotal += parseFloat(input.value) || 0;
+                subTotal += parseFloat(input.value) || 0;
             });
+            subTotalInput.value = subTotal.toFixed(2);
+            
+            // Calculate discount
+            let discount = 0;
+            let discountVal = parseFloat(discountValue.value) || 0;
+            
+            if (discountType.value === 'percentage') {
+                discount = (subTotal * discountVal) / 100;
+            } else {
+                discount = discountVal;
+            }
+            
+            // Ensure discount doesn't exceed subtotal
+            if (discount > subTotal) {
+                discount = subTotal;
+                discountValue.value = discount;
+            }
+            
+            // Update discount display
+            if (discountType.value === 'percentage') {
+                discountDisplay.innerHTML = discountVal + '%';
+            } else {
+                discountDisplay.innerHTML = '₹' + discount.toFixed(2);
+            }
+            
+            // Calculate grand total
+            let grandTotal = subTotal - discount;
+            if (grandTotal < 0) grandTotal = 0;
             grandTotalInput.value = grandTotal.toFixed(2);
-            return grandTotal;
-        }
-        
-        // Update due amount based on grand total and paid amount
-        function updateDueAmount() {
-            const grandTotal = parseFloat(grandTotalInput.value) || 0;
+            
+            // Update due amount
             const paidAmount = parseFloat(paidAmountInput.value) || 0;
             let dueAmount = grandTotal - paidAmount;
             
-            // Ensure due amount is not negative
             if (dueAmount < 0) {
                 dueAmount = 0;
                 paidAmountInput.value = grandTotal.toFixed(2);
@@ -676,7 +724,7 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
             displayPaidAmount.value = paidAmount.toFixed(2);
             dueAmountInput.value = dueAmount.toFixed(2);
             
-            // Style due amount based on value
+            // Style due amount
             if (dueAmount > 0) {
                 dueAmountInput.style.color = '#dc3545';
                 dueAmountInput.style.backgroundColor = '#f8d7da';
@@ -686,28 +734,22 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                 dueAmountInput.style.backgroundColor = '#d4edda';
                 dueAmountInput.style.fontWeight = 'bold';
             }
-            
-            // Validate paid amount against grand total
-            if (paidAmount > grandTotal) {
-                paidAmountInput.style.borderColor = '#dc3545';
-                paidAmountInput.style.backgroundColor = '#f8d7da';
-            } else {
-                paidAmountInput.style.borderColor = '#ffc107';
-                paidAmountInput.style.backgroundColor = '#fff3cd';
-            }
         }
-        
+
+        // Event listeners for discount
+        discountType.addEventListener('change', calculateAll);
+        discountValue.addEventListener('input', calculateAll);
+        paidAmountInput.addEventListener('input', calculateAll);
+
         // Add new row
         document.getElementById('addRow').addEventListener('click', function() {
             const tbody = document.querySelector('#itemsTable tbody');
             const newRow = tbody.rows[0].cloneNode(true);
             
-            // Clear input values
             newRow.querySelectorAll('input').forEach(input => {
                 if (input.type !== 'button') input.value = '';
             });
 
-            // Reset selects: category -> default, part -> disabled/empty
             const categorySelect = newRow.querySelector('.category-select');
             const partSelect = newRow.querySelector('.part-select');
             if (categorySelect) categorySelect.selectedIndex = 0;
@@ -716,12 +758,15 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                 partSelect.disabled = true;
             }
             
-            // Add remove button event
+            // Disable quantity and price fields
+            newRow.querySelector('.quantity').disabled = true;
+            newRow.querySelector('.selling-price').disabled = true;
+            
             const removeBtn = newRow.querySelector('.remove-row');
             removeBtn.addEventListener('click', function() {
                 if (tbody.rows.length > 1) {
                     this.closest('tr').remove();
-                    updateCalculations();
+                    calculateAll();
                 }
             });
             
@@ -734,38 +779,40 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                 const tbody = document.querySelector('#itemsTable tbody');
                 if (tbody.rows.length > 1) {
                     e.target.closest('tr').remove();
-                    updateCalculations();
+                    calculateAll();
                 }
             }
         });
         
-        // Handle part selection
+        // Category selection
         document.addEventListener('change', function(e) {
-            // When category changes, populate the part select for that row
             if (e.target.classList.contains('category-select')) {
                 const row = e.target.closest('tr');
                 const partSelect = row.querySelector('.part-select');
                 const cat = e.target.value;
+                
                 partSelect.innerHTML = '<option value="">Select Part</option>';
                 partSelect.disabled = true;
+                
                 if (cat && partsByCategory[cat]) {
                     partsByCategory[cat].forEach(p => {
                         const opt = document.createElement('option');
                         opt.value = p.id;
                         opt.textContent = p.part_name;
-                        opt.dataset.price = p.unit_price;
+                        opt.dataset.price = p.selling_price || p.unit_price;
                         opt.dataset.stock = p.current_stock;
                         partSelect.appendChild(opt);
                     });
                     partSelect.disabled = false;
                 }
-                // clear price/stock for the row
+                
                 row.querySelector('.available-stock').value = '';
                 row.querySelector('.selling-price').value = '';
+                row.querySelector('.quantity').value = '';
                 row.querySelector('.row-total').value = '';
             }
 
-            // When part changes, populate price/stock for that row
+            // Part selection
             if (e.target.classList.contains('part-select')) {
                 const selected = e.target.options[e.target.selectedIndex];
                 const row = e.target.closest('tr');
@@ -776,19 +823,23 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
 
                     row.querySelector('.selling-price').value = price;
                     row.querySelector('.available-stock').value = stock;
+                    row.querySelector('.quantity').disabled = false;
+                    row.querySelector('.selling-price').disabled = false;
 
-                    // Validate quantity against stock
                     const quantityInput = row.querySelector('.quantity');
                     quantityInput.max = stock;
                     quantityInput.setAttribute('max', stock);
                 } else {
                     row.querySelector('.available-stock').value = '';
                     row.querySelector('.selling-price').value = '';
+                    row.querySelector('.quantity').value = '';
+                    row.querySelector('.quantity').disabled = true;
+                    row.querySelector('.selling-price').disabled = true;
                 }
             }
         });
         
-        // Calculate row total on quantity or price change
+        // Calculate row total
         document.addEventListener('input', function(e) {
             if (e.target.classList.contains('quantity') || e.target.classList.contains('selling-price')) {
                 const row = e.target.closest('tr');
@@ -796,7 +847,6 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                 const price = parseFloat(row.querySelector('.selling-price').value) || 0;
                 const availableStock = parseInt(row.querySelector('.available-stock').value) || 0;
                 
-                // Validate quantity against stock
                 if (quantity > availableStock) {
                     alert('Quantity exceeds available stock! Available: ' + availableStock);
                     row.querySelector('.quantity').value = availableStock;
@@ -805,32 +855,11 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                 
                 const total = quantity * price;
                 row.querySelector('.row-total').value = total.toFixed(2);
-                updateCalculations();
+                calculateAll();
             }
         });
         
-        // Update due amount when paid amount changes (real-time)
-        paidAmountInput.addEventListener('input', function() {
-            updateDueAmount();
-        });
-        
-        // Manual calculate button
-        document.getElementById('calculateTotal').addEventListener('click', function() {
-            updateCalculations();
-        });
-        
-        // Auto-uppercase for registration fields
-        const regFields = ['existing_vehicle', 'new_vehicle_registration'];
-        regFields.forEach(id => {
-            const field = document.getElementById(id);
-            if (field) {
-                field.addEventListener('input', function() {
-                    this.value = this.value.toUpperCase();
-                });
-            }
-        });
-        
-        // Form validation before submit
+        // Form validation
         document.getElementById('saleForm').addEventListener('submit', function(e) {
             const newCustomerChecked = document.getElementById('new_customer').checked;
             
@@ -845,7 +874,6 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                 }
             }
             
-            // Check if at least one item is added
             const quantities = document.querySelectorAll('.quantity');
             let hasItems = false;
             quantities.forEach(q => {
@@ -858,7 +886,6 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
                 return false;
             }
             
-            // Validate paid amount doesn't exceed total
             const grandTotal = parseFloat(grandTotalInput.value) || 0;
             const paidAmount = parseFloat(paidAmountInput.value) || 0;
             
@@ -870,14 +897,9 @@ $sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registratio
             }
         });
         
-        // Initialize on page load
-        updateCalculations();
+        // Initialize
+        calculateAll();
     });
-    </script>
-
-    <script>
-    // Populate partsByCategory from PHP-generated map
-    partsByCategory = <?php echo json_encode($parts_map); ?> || {};
     </script>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
