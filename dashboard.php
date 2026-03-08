@@ -29,13 +29,49 @@ $today = date('Y-m-d');
 $result = mysqli_query($conn, "SELECT SUM(total_amount) as today_sales, COUNT(*) as today_transactions FROM sales WHERE sale_date = '$today'");
 $today_data = mysqli_fetch_assoc($result);
 
-// Get outstanding dues
+// Get outstanding dues - FIXED SYNTAX HERE
 $dues_query = mysqli_query($conn, "SELECT 
                                     COUNT(*) as total_due_invoices,
-                                    SUM(due_amount) as total_due_amount
+                                    SUM(CASE 
+                                        WHEN grand_total IS NOT NULL AND grand_total > 0 
+                                        THEN (grand_total - paid_amount)
+                                        ELSE (total_amount - paid_amount)
+                                    END) as total_due_amount
                                 FROM sales 
-                                WHERE due_amount > 0");
+                                WHERE (CASE 
+                                        WHEN grand_total IS NOT NULL AND grand_total > 0 
+                                        THEN grand_total
+                                        ELSE total_amount
+                                    END) > paid_amount");
 $dues = mysqli_fetch_assoc($dues_query);
+
+// Get recent dues with correct calculation - SHOW ONLY DUE BILLS - FIXED SYNTAX HERE
+$recent_dues = mysqli_query($conn, "SELECT 
+                                    s.id, 
+                                    s.invoice_number, 
+                                    s.sale_date, 
+                                    s.total_amount,
+                                    s.grand_total,
+                                    s.paid_amount, 
+                                    s.due_amount,
+                                    s.payment_status,
+                                    s.discount_type,
+                                    s.discount_value,
+                                    s.discount_amount,
+                                    s.subtotal,
+                                    COALESCE(s.grand_total, s.total_amount) as actual_total,
+                                    (COALESCE(s.grand_total, s.total_amount) - s.paid_amount) as actual_due_amount,
+                                    c.customer_name, 
+                                    c.phone, 
+                                    c.vehicle_registration,
+                                    c.id as customer_id
+                                  FROM sales s
+                                  LEFT JOIN customers c ON s.customer_id = c.id
+                                  WHERE (COALESCE(s.grand_total, s.total_amount) - s.paid_amount) > 0
+                                  ORDER BY s.sale_date DESC
+                                  LIMIT 15");
+
+// Rest of your HTML code continues exactly as you had it...
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -104,6 +140,55 @@ $dues = mysqli_fetch_assoc($dues_query);
             .row.mt-2 i.bi { font-size: 20px; }
             .row > .col-md-3 .card .card-body h2 { font-size: 16px; }
             .row > .col-md-3 i.bi { font-size: 20px; }
+        }
+        
+        /* Due amount styling */
+        .due-amount {
+            font-weight: bold;
+        }
+        .due-positive {
+            color: #dc3545;
+        }
+        .due-zero {
+            color: #28a745;
+        }
+        
+        /* Collect payment button styling */
+        .collect-payment-btn {
+            background-color: #ffc107;
+            color: #000;
+            border: none;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 12px;
+            transition: all 0.3s;
+        }
+        .collect-payment-btn:hover {
+            background-color: #e0a800;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(255, 193, 7, 0.3);
+        }
+        .collect-payment-btn i {
+            margin-right: 4px;
+        }
+        
+        /* Quick payment modal */
+        .quick-payment-modal .modal-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .quick-payment-modal .modal-title i {
+            margin-right: 8px;
+        }
+        .due-highlight {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #dc3545;
+            padding: 10px;
+            background: #f8d7da;
+            border-radius: 8px;
+            text-align: center;
         }
     </style>
 </head>
@@ -353,20 +438,18 @@ $dues = mysqli_fetch_assoc($dues_query);
                     </div>
                 </div>
             </div>
-            <!-- Add this in the admin section after other entries -->
-<div class="col-md-3 mb-3">
-    <div class="card h-100 border-success">
-        <div class="card-body text-center">
-            <i class="bi bi-calculator fs-1 text-success"></i>
-            <h5 class="card-title mt-2">Simple Accounting</h5>
-            <p class="card-text text-muted small">Track income, expenses & balance</p>
-            <a href="simple_accounting.php" class="btn btn-outline-success btn-sm w-100">View Accounting</a>
-            <small class="text-muted d-block mt-2">Today's income & total balance</small>
-        </div>
-    </div>
-</div>
-
-            
+            <!-- Simple Accounting -->
+            <div class="col-md-3 mb-3">
+                <div class="card h-100 border-success">
+                    <div class="card-body text-center">
+                        <i class="bi bi-calculator fs-1 text-success"></i>
+                        <h5 class="card-title mt-2">Simple Accounting</h5>
+                        <p class="card-text text-muted small">Track income, expenses & balance</p>
+                        <a href="simple_accounting.php" class="btn btn-outline-success btn-sm w-100">View Accounting</a>
+                        <small class="text-muted d-block mt-2">Today's income & total balance</small>
+                    </div>
+                </div>
+            </div>
         </div>
         </div>
         <?php endif; ?>
@@ -455,45 +538,68 @@ $dues = mysqli_fetch_assoc($dues_query);
             </div>
         </div>
 
-        <!-- Recent Dues Section (for Staff to see) -->
+        <!-- Recent Outstanding Dues Section (with Subtotal and Discount) -->
         <div class="row mt-4">
             <div class="col-12">
                 <div class="card">
-                    <div class="card-header bg-warning">
-                        <h5 class="mb-0"><i class="bi bi-exclamation-triangle"></i> Recent Outstanding Dues</h5>
+                    <div class="card-header bg-warning text-white d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">
+                            <i class="bi bi-exclamation-triangle"></i> 
+                            Recent Outstanding Dues 
+                            <span class="badge bg-light text-dark ms-2"><?php echo mysqli_num_rows($recent_dues); ?> Bills</span>
+                        </h5>
+                        <a href="sales.php" class="btn btn-sm btn-light">View All Sales</a>
                     </div>
                     <div class="card-body">
                         <?php
-                        $recent_dues = mysqli_query($conn, "SELECT s.id, s.invoice_number, s.sale_date, 
-                                                                 s.total_amount, s.paid_amount, s.due_amount,
-                                                                 c.customer_name, c.phone, c.vehicle_registration
-                                                          FROM sales s
-                                                          LEFT JOIN customers c ON s.customer_id = c.id
-                                                          WHERE s.due_amount > 0
-                                                          ORDER BY s.sale_date DESC
-                                                          LIMIT 10");
                         if(mysqli_num_rows($recent_dues) > 0):
                         ?>
                         <div class="table-responsive">
                             <table class="table table-sm table-striped">
                                 <thead>
                                     <tr>
-                                        <th>Invoice</th>
+                                        <th>Invoice #</th>
                                         <th>Date</th>
                                         <th>Customer</th>
                                         <th>Vehicle</th>
-                                        <th>Total</th>
+                                        <th>Sub Total</th>
+                                        <th>Discount</th>
+                                        <th>Grand Total</th>
                                         <th>Paid</th>
-                                        <th>Due</th>
+                                        <th>Due Amount</th>
+                                        <th>Status</th>
                                         <th>Action</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <?php while($due = mysqli_fetch_assoc($recent_dues)): ?>
+                                    <?php 
+                                    // Reset pointer
+                                    mysqli_data_seek($recent_dues, 0);
+                                    while($due = mysqli_fetch_assoc($recent_dues)): 
+                                        // Get subtotal from sale items
+                                        $subtotal_query = mysqli_query($conn, "SELECT SUM(quantity * selling_price) as subtotal 
+                                                                              FROM sale_items WHERE sale_id = " . $due['id']);
+                                        $subtotal_data = mysqli_fetch_assoc($subtotal_query);
+                                        $subtotal = $subtotal_data['subtotal'] ?? $due['actual_total'];
+                                        
+                                        // Get discount info
+                                        $discount_amount = $due['discount_amount'] ?? 0;
+                                        $discount_type = $due['discount_type'] ?? 'fixed';
+                                        $discount_value = $due['discount_value'] ?? 0;
+                                        
+                                        $total_bill = $due['actual_total'];
+                                        $due_amount = $due['actual_due_amount'];
+                                        $paid_percentage = $total_bill > 0 ? ($due['paid_amount'] / $total_bill) * 100 : 0;
+                                    ?>
                                     <tr>
                                         <td><strong><?php echo $due['invoice_number']; ?></strong></td>
                                         <td><?php echo date('d-m-Y', strtotime($due['sale_date'])); ?></td>
-                                        <td><?php echo htmlspecialchars($due['customer_name'] ?? 'Walk-in'); ?></td>
+                                        <td>
+                                            <?php echo htmlspecialchars($due['customer_name'] ?? 'Walk-in'); ?>
+                                            <?php if($due['phone']): ?>
+                                                <br><small class="text-muted"><?php echo $due['phone']; ?></small>
+                                            <?php endif; ?>
+                                        </td>
                                         <td>
                                             <?php if($due['vehicle_registration']): ?>
                                                 <span class="badge bg-info"><?php echo $due['vehicle_registration']; ?></span>
@@ -501,21 +607,133 @@ $dues = mysqli_fetch_assoc($dues_query);
                                                 -
                                             <?php endif; ?>
                                         </td>
-                                        <td>₹<?php echo number_format($due['total_amount'], 2); ?></td>
-                                        <td class="text-success">₹<?php echo number_format($due['paid_amount'], 2); ?></td>
-                                        <td class="text-danger">₹<?php echo number_format($due['due_amount'], 2); ?></td>
+                                        <td class="text-secondary">
+                                            <strong>₹<?php echo number_format($subtotal, 2); ?></strong>
+                                        </td>
+                                        <td class="text-info">
+                                            <?php if($discount_amount > 0): ?>
+                                                <strong>-₹<?php echo number_format($discount_amount, 2); ?></strong>
+                                                <?php if($discount_type == 'percentage'): ?>
+                                                    <br><small>(<?php echo $discount_value; ?>%)</small>
+                                                <?php endif; ?>
+                                            <?php else: ?>
+                                                -
+                                            <?php endif; ?>
+                                        </td>
+                                        <td class="text-primary">
+                                            <strong>₹<?php echo number_format($total_bill, 2); ?></strong>
+                                        </td>
+                                        <td class="text-success">
+                                            ₹<?php echo number_format($due['paid_amount'], 2); ?>
+                                            <br><small class="text-muted"><?php echo round($paid_percentage, 1); ?>%</small>
+                                        </td>
+                                        <td class="text-danger due-amount">
+                                            <strong>₹<?php echo number_format($due_amount, 2); ?></strong>
+                                        </td>
                                         <td>
-                                            <a href="sale_view.php?id=<?php echo $due['id']; ?>" class="btn btn-sm btn-warning">
-                                                <i class="bi bi-cash"></i> Collect
-                                            </a>
+                                            <?php 
+                                            $status_class = 'warning';
+                                            $status_text = 'Partial';
+                                            if($due_amount == $total_bill) {
+                                                $status_class = 'danger';
+                                                $status_text = 'Pending';
+                                            } elseif($due_amount == 0) {
+                                                $status_class = 'success';
+                                                $status_text = 'Paid';
+                                            }
+                                            ?>
+                                            <span class="badge bg-<?php echo $status_class; ?>">
+                                                <?php echo $status_text; ?>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <!-- Payment options -->
+                                            <div class="btn-group btn-group-sm" role="group">
+                                                <a href="sale_view.php?id=<?php echo $due['id']; ?>" 
+                                                   class="btn btn-info" 
+                                                   title="View Details">
+                                                    <i class="bi bi-eye"></i>
+                                                </a>
+                                                <button type="button" 
+                                                        class="btn btn-warning" 
+                                                        onclick="openQuickPayment(<?php echo $due['id']; ?>, '<?php echo $due['invoice_number']; ?>', <?php echo $due_amount; ?>)"
+                                                        title="Collect Payment">
+                                                    <i class="bi bi-cash"></i>
+                                                </button>
+                                                <a href="invoice.php?id=<?php echo $due['id']; ?>" 
+                                                   class="btn btn-secondary" 
+                                                   target="_blank" 
+                                                   title="Print Invoice">
+                                                    <i class="bi bi-printer"></i>
+                                                </a>
+                                            </div>
                                         </td>
                                     </tr>
                                     <?php endwhile; ?>
                                 </tbody>
+                                <tfoot class="table-secondary">
+                                    <?php
+                                    // Calculate totals
+                                    $total_subtotal = 0;
+                                    $total_discount = 0;
+                                    $total_grand = 0;
+                                    $total_paid_foot = 0;
+                                    $total_due_foot = 0;
+                                    
+                                    mysqli_data_seek($recent_dues, 0);
+                                    while($due = mysqli_fetch_assoc($recent_dues)) {
+                                        $subtotal_query = mysqli_query($conn, "SELECT SUM(quantity * selling_price) as subtotal 
+                                                                              FROM sale_items WHERE sale_id = " . $due['id']);
+                                        $subtotal_data = mysqli_fetch_assoc($subtotal_query);
+                                        $subtotal = $subtotal_data['subtotal'] ?? $due['actual_total'];
+                                        
+                                        $total_subtotal += $subtotal;
+                                        $total_discount += ($due['discount_amount'] ?? 0);
+                                        $total_grand += $due['actual_total'];
+                                        $total_paid_foot += $due['paid_amount'];
+                                        $total_due_foot += $due['actual_due_amount'];
+                                    }
+                                    ?>
+                                    <tr>
+                                        <th colspan="4" class="text-end">Totals:</th>
+                                        <th class="text-secondary">₹<?php echo number_format($total_subtotal, 2); ?></th>
+                                        <th class="text-info">-₹<?php echo number_format($total_discount, 2); ?></th>
+                                        <th class="text-primary">₹<?php echo number_format($total_grand, 2); ?></th>
+                                        <th class="text-success">₹<?php echo number_format($total_paid_foot, 2); ?></th>
+                                        <th class="text-danger">₹<?php echo number_format($total_due_foot, 2); ?></th>
+                                        <th colspan="2"></th>
+                                    </tr>
+                                </tfoot>
                             </table>
                         </div>
+                        
+                        <!-- Progress bar for total due collection -->
+                        <?php
+                        $collection_percentage = $total_grand > 0 ? ($total_paid_foot / $total_grand) * 100 : 0;
+                        ?>
+                        <div class="mt-3">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <span>
+                                    <strong>Summary:</strong> 
+                                    Subtotal: ₹<?php echo number_format($total_subtotal, 2); ?> | 
+                                    Discount: ₹<?php echo number_format($total_discount, 2); ?> | 
+                                    Grand Total: ₹<?php echo number_format($total_grand, 2); ?> | 
+                                    <span class="text-success">Paid: ₹<?php echo number_format($total_paid_foot, 2); ?></span> | 
+                                    <span class="text-danger">Due: ₹<?php echo number_format($total_due_foot, 2); ?></span>
+                                </span>
+                                <span><strong>Collection Rate:</strong> <?php echo round($collection_percentage, 1); ?>%</span>
+                            </div>
+                            <div class="progress mt-1" style="height: 8px;">
+                                <div class="progress-bar bg-success" style="width: <?php echo $collection_percentage; ?>%"></div>
+                                <div class="progress-bar bg-warning" style="width: <?php echo 100 - $collection_percentage; ?>%"></div>
+                            </div>
+                        </div>
+                        
                         <?php else: ?>
-                        <p class="text-center text-muted mb-0">No outstanding dues! 🎉</p>
+                        <div class="text-center py-4">
+                            <i class="bi bi-check-circle-fill text-success fs-1"></i>
+                            <p class="text-muted mt-2 mb-0">No outstanding dues! All invoices are paid. 🎉</p>
+                        </div>
                         <?php endif; ?>
                     </div>
                 </div>
@@ -543,6 +761,97 @@ $dues = mysqli_fetch_assoc($dues_query);
         </div>
     </div>
 
+    <!-- Quick Payment Modal -->
+    <div class="modal fade quick-payment-modal" id="quickPaymentModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-cash-stack"></i> Quick Payment Collection
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <form method="POST" action="sale_view.php" id="quickPaymentForm">
+                    <div class="modal-body">
+                        <input type="hidden" name="sale_id" id="quick_sale_id">
+                        <input type="hidden" name="add_payment" value="1">
+                        
+                        <div class="alert alert-info" id="invoice_info"></div>
+                        
+                        <div class="due-highlight mb-3" id="due_display"></div>
+                        
+                        <div class="mb-3">
+                            <label for="quick_payment_amount" class="form-label">Payment Amount *</label>
+                            <input type="number" step="0.01" class="form-control" id="quick_payment_amount" name="payment_amount" required>
+                            <small class="text-muted">Enter amount to collect</small>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="quick_payment_method" class="form-label">Payment Method *</label>
+                            <select class="form-control" id="quick_payment_method" name="payment_method" required>
+                                <option value="cash">Cash</option>
+                                <option value="card">Card</option>
+                                <option value="online">Online</option>
+                                <option value="bank_transfer">Bank Transfer</option>
+                            </select>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="quick_reference_number" class="form-label">Reference Number (Optional)</label>
+                            <input type="text" class="form-control" id="quick_reference_number" name="reference_number">
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="quick_notes" class="form-label">Notes (Optional)</label>
+                            <textarea class="form-control" id="quick_notes" name="notes" rows="2"></textarea>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-primary" id="submitQuickPayment">
+                            <i class="bi bi-check-circle"></i> Confirm Payment
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <script>
+    // Function to open quick payment modal
+    function openQuickPayment(saleId, invoiceNumber, dueAmount) {
+        document.getElementById('quick_sale_id').value = saleId;
+        document.getElementById('invoice_info').innerHTML = '<strong>Invoice #:</strong> ' + invoiceNumber;
+        document.getElementById('due_display').innerHTML = 'Due Amount: ₹' + dueAmount.toFixed(2);
+        document.getElementById('quick_payment_amount').max = dueAmount;
+        document.getElementById('quick_payment_amount').value = dueAmount;
+        
+        // Show the modal
+        var modal = new bootstrap.Modal(document.getElementById('quickPaymentModal'));
+        modal.show();
+    }
+    
+    // Validate payment amount
+    document.getElementById('quick_payment_amount').addEventListener('input', function() {
+        const maxAmount = parseFloat(this.max);
+        const currentAmount = parseFloat(this.value) || 0;
+        
+        if (currentAmount > maxAmount) {
+            this.value = maxAmount;
+            alert('Payment amount cannot exceed due amount');
+        }
+    });
+    
+    // Form submission validation
+    document.getElementById('quickPaymentForm').addEventListener('submit', function(e) {
+        const paymentAmount = parseFloat(document.getElementById('quick_payment_amount').value) || 0;
+        if (paymentAmount <= 0) {
+            e.preventDefault();
+            alert('Please enter a valid payment amount');
+        }
+    });
+    </script>
 </body>
 </html>

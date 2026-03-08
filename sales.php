@@ -15,6 +15,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['add_sale'])) {
     $sale_date = $_POST['sale_date'];
     $invoice_number = mysqli_real_escape_string($conn, $_POST['invoice_number']);
     $payment_method = $_POST['payment_method'];
+    // Store discount in database
     $discount_type = $_POST['discount_type'] ?? 'fixed';
     $discount_value = floatval($_POST['discount_value'] ?? 0);
     $paid_amount = floatval($_POST['paid_amount'] ?? 0);
@@ -37,9 +38,26 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['add_sale'])) {
             $vehicle_registration = $vehicle_reg;
         }
         
-        // Insert sale
-        $query = "INSERT INTO sales (customer_id, sale_date, invoice_number, payment_method, discount_type, discount_value, paid_amount, created_by) 
-                  VALUES ($customer_id, '$sale_date', '$invoice_number', '$payment_method', '$discount_type', $discount_value, $paid_amount, $created_by)";
+        // Insert sale - NOW STORING DISCOUNT
+        $query = "INSERT INTO sales (
+            customer_id, 
+            sale_date, 
+            invoice_number, 
+            payment_method, 
+            paid_amount, 
+            discount_type,
+            discount_value,
+            created_by
+        ) VALUES (
+            $customer_id, 
+            '$sale_date', 
+            '$invoice_number', 
+            '$payment_method', 
+            $paid_amount, 
+            '$discount_type',
+            $discount_value,
+            $created_by
+        )";
         mysqli_query($conn, $query);
         $sale_id = mysqli_insert_id($conn);
         
@@ -88,25 +106,29 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['add_sale'])) {
             $discount_amount = $total_amount;
         }
         
-        $final_amount = $total_amount - $discount_amount;
+        // Calculate Grand Total after discount
+        $grand_total = $total_amount - $discount_amount;
         
-        // Calculate due amount and payment status
-        $due_amount = $final_amount - $paid_amount;
+        // Calculate due amount based on Grand Total
+        $due_amount = $grand_total - $paid_amount;
+        
+        // Determine payment status based on due amount
         $payment_status = 'paid';
         if ($due_amount > 0) {
             $payment_status = 'partial';
         } elseif ($due_amount < 0) {
-            // If paid amount exceeds final amount, adjust paid amount
-            $paid_amount = $final_amount;
+            // If paid amount exceeds Grand Total, adjust paid amount
+            $paid_amount = $grand_total;
             $due_amount = 0;
             $payment_status = 'paid';
         }
         
-        // Update sale with total amount and payment status
+        // Update sale with all calculated values
         $update_query = "UPDATE sales SET 
-                        total_amount = $total_amount,
+                        subtotal = $total_amount,
+                        total_amount = $grand_total,
                         discount_amount = $discount_amount,
-                        final_amount = $final_amount,
+                        grand_total = $grand_total,
                         paid_amount = $paid_amount,
                         due_amount = $due_amount,
                         payment_status = '$payment_status' 
@@ -127,7 +149,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['add_sale'])) {
         }
         
         mysqli_commit($conn);
-        $_SESSION['success'] = "Sale completed successfully! Invoice: $invoice_number";
+        
+        $_SESSION['success'] = "Sale completed successfully! Invoice: $invoice_number (Grand Total: ₹" . number_format($grand_total, 2) . ", Paid: ₹" . number_format($paid_amount, 2) . ", Due: ₹" . number_format($due_amount, 2) . ")";
         redirect("sale_view.php?id=$sale_id");
         
     } catch (Exception $e) {
@@ -137,6 +160,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['add_sale'])) {
     }
 }
 
+// Rest of your existing code remains the same...
 // Fetch categories
 $categories = mysqli_query($conn, "SELECT * FROM categories ORDER BY category_name");
 
@@ -167,8 +191,12 @@ $customers = mysqli_query($conn, "SELECT c.*, bm.model_name, bc.name as company_
                                   LEFT JOIN bike_companies bc ON bm.company_id = bc.id
                                   ORDER BY c.customer_name");
 
-// Fetch recent sales with vehicle info
-$sales = mysqli_query($conn, "SELECT s.*, c.customer_name, c.vehicle_registration, u.username,
+// Fetch recent sales with vehicle info - Use grand_total for display
+$sales = mysqli_query($conn, "SELECT s.*, 
+                              c.customer_name, 
+                              c.vehicle_registration, 
+                              u.username,
+                              COALESCE(s.grand_total, s.total_amount) as display_total,
                               (SELECT COUNT(*) FROM sale_payments WHERE sale_id = s.id) as payment_count
                               FROM sales s 
                               LEFT JOIN customers c ON s.customer_id = c.id 
@@ -245,6 +273,11 @@ while($p = mysqli_fetch_assoc($parts)) {
             border-radius: 4px;
             font-size: 0.8em;
             margin-left: 5px;
+        }
+        .discount-note {
+            font-size: 0.8em;
+            color: #6c757d;
+            margin-top: 5px;
         }
     </style>
 </head>
@@ -497,7 +530,7 @@ while($p = mysqli_fetch_assoc($parts)) {
                                                     <td><input type="text" class="form-control grand-total" id="subTotal" readonly value="0.00" style="font-weight:bold; background-color:#e3f2fd; text-align:right;"></td>
                                                 </tr>
                                                 
-                                                <!-- Discount Section -->
+                                                <!-- Discount Section (Now stored in database) -->
                                                 <tr class="discount-section">
                                                     <td colspan="2" class="p-2">
                                                         <div class="row">
@@ -514,12 +547,12 @@ while($p = mysqli_fetch_assoc($parts)) {
                                                                 <span class="badge bg-info p-2" id="discount_display">₹0</span>
                                                             </div>
                                                         </div>
-                                                        <small class="text-muted">Discount will be applied to total</small>
+                                                        <small class="text-muted">Discount will be stored in database</small>
                                                     </td>
                                                 </tr>
                                                 
                                                 <tr>
-                                                    <td><strong>Grand Total:</strong></td>
+                                                    <td><strong>Grand Total (after discount):</strong></td>
                                                     <td><input type="text" class="form-control grand-total" id="grandTotal" readonly value="0.00" style="font-weight:bold; background-color:#cce5ff; text-align:right;"></td>
                                                 </tr>
                                                 <tr>
@@ -531,6 +564,9 @@ while($p = mysqli_fetch_assoc($parts)) {
                                                     <td><input type="text" class="form-control" id="dueAmount" readonly value="0.00" style="font-weight: bold; text-align:right;"></td>
                                                 </tr>
                                             </table>
+                                            <div class="discount-note text-center mt-2">
+                                                <i class="bi bi-info-circle"></i> Note: Discount is now stored in database for accurate reporting
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -552,91 +588,113 @@ while($p = mysqli_fetch_assoc($parts)) {
             </div>
         </div>
 
-        <!-- Recent Sales Section -->
-        <div class="row mt-4">
-            <div class="col-12">
-                <div class="card">
-                    <div class="card-header bg-success text-white">
-                        <h5 class="mb-0"><i class="bi bi-clock-history"></i> Recent Sales</h5>
-                    </div>
-                    <div class="card-body">
-                        <div class="table-responsive">
-                            <table class="table table-bordered table-striped table-hover">
-                                <thead class="table-dark">
-                                    <tr>
-                                        <th>Date</th>
-                                        <th>Invoice #</th>
-                                        <th>Customer</th>
-                                        <th>Vehicle</th>
-                                        <th>Total</th>
-                                        <th>Discount</th>
-                                        <th>Final</th>
-                                        <th>Paid</th>
-                                        <th>Due</th>
-                                        <th>Status</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php while($sale = mysqli_fetch_assoc($sales)): 
-                                        $final_amount = $sale['final_amount'] ?? $sale['total_amount'];
-                                        $discount_amount = $sale['discount_amount'] ?? 0;
+<!-- Recent Sales Section -->
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header bg-success text-white">
+                <h5 class="mb-0"><i class="bi bi-clock-history"></i> Recent Sales</h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-bordered table-striped table-hover">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>Date</th>
+                                <th>Invoice #</th>
+                                <th>Customer</th>
+                                <th>Vehicle</th>
+                                <th>Sub Total</th>
+                                <th>Discount</th>
+                                <th>Grand Total</th>
+                                <th>Paid</th>
+                                <th>Due</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php 
+                            // Reset the sales pointer
+                            mysqli_data_seek($sales, 0);
+                            while($sale = mysqli_fetch_assoc($sales)): 
+                                // Get subtotal from sale items
+                                $subtotal_query = mysqli_query($conn, "SELECT SUM(quantity * selling_price) as subtotal 
+                                                                      FROM sale_items WHERE sale_id = " . $sale['id']);
+                                $subtotal_data = mysqli_fetch_assoc($subtotal_query);
+                                $subtotal = $subtotal_data['subtotal'] ?? $sale['total_amount'];
+                                
+                                // Get discount amount from sales table
+                                $discount_amount = $sale['discount_amount'] ?? 0;
+                                
+                                // Grand total is stored in total_amount (after discount)
+                                $grand_total = $sale['total_amount'];
+                                
+                                // Calculate due amount
+                                $due_amount = $grand_total - $sale['paid_amount'];
+                            ?>
+                            <tr>
+                                <td><?php echo date('d-m-Y', strtotime($sale['sale_date'])); ?></td>
+                                <td><strong><?php echo htmlspecialchars($sale['invoice_number']); ?></strong></td>
+                                <td><?php echo htmlspecialchars($sale['customer_name'] ?? 'Walk-in'); ?></td>
+                                <td>
+                                    <?php if($sale['vehicle_registration']): ?>
+                                        <span class="badge bg-info"><?php echo $sale['vehicle_registration']; ?></span>
+                                    <?php else: ?>
+                                        -
+                                    <?php endif; ?>
+                                </td>
+                                <td class="text-secondary">₹<?php echo number_format($subtotal, 2); ?></td>
+                                <td class="text-info">
+                                    <?php if($discount_amount > 0): ?>
+                                        -₹<?php echo number_format($discount_amount, 2); ?>
+                                        <?php if(isset($sale['discount_type']) && $sale['discount_type'] == 'percentage'): ?>
+                                            <br><small>(<?php echo $sale['discount_value']; ?>%)</small>
+                                        <?php endif; ?>
+                                    <?php else: ?>
+                                        -
+                                    <?php endif; ?>
+                                </td>
+                                <td class="text-primary"><strong>₹<?php echo number_format($grand_total, 2); ?></strong></td>
+                                <td class="text-success">₹<?php echo number_format($sale['paid_amount'], 2); ?></td>
+                                <td class="text-<?php echo $due_amount > 0 ? 'danger' : 'success'; ?>">
+                                    ₹<?php echo number_format($due_amount, 2); ?>
+                                </td>
+                                <td>
+                                    <?php 
+                                    $status_class = 'success';
+                                    $status_text = 'Paid';
+                                    if($due_amount > 0 && $sale['paid_amount'] > 0) {
+                                        $status_class = 'warning';
+                                        $status_text = 'Partial';
+                                    } elseif($due_amount == $grand_total && $grand_total > 0) {
+                                        $status_class = 'danger';
+                                        $status_text = 'Pending';
+                                    }
                                     ?>
-                                    <tr>
-                                        <td><?php echo date('d-m-Y', strtotime($sale['sale_date'])); ?></td>
-                                        <td><strong><?php echo htmlspecialchars($sale['invoice_number']); ?></strong></td>
-                                        <td><?php echo htmlspecialchars($sale['customer_name'] ?? 'Walk-in'); ?></td>
-                                        <td>
-                                            <?php if($sale['vehicle_registration']): ?>
-                                                <span class="badge bg-info"><?php echo $sale['vehicle_registration']; ?></span>
-                                            <?php else: ?>
-                                                -
-                                            <?php endif; ?>
-                                        </td>
-                                        <td>₹<?php echo number_format($sale['total_amount'], 2); ?></td>
-                                        <td class="text-info">-₹<?php echo number_format($discount_amount, 2); ?></td>
-                                        <td class="text-primary">₹<?php echo number_format($final_amount, 2); ?></td>
-                                        <td class="text-success">₹<?php echo number_format($sale['paid_amount'], 2); ?></td>
-                                        <td class="text-<?php echo $sale['due_amount'] > 0 ? 'danger' : 'success'; ?>">
-                                            ₹<?php echo number_format($sale['due_amount'], 2); ?>
-                                        </td>
-                                        <td>
-                                            <?php 
-                                            $status_class = 'success';
-                                            $status_text = 'Paid';
-                                            if($sale['payment_status'] == 'partial') {
-                                                $status_class = 'warning';
-                                                $status_text = 'Partial';
-                                            } elseif($sale['payment_status'] == 'pending') {
-                                                $status_class = 'danger';
-                                                $status_text = 'Pending';
-                                            }
-                                            ?>
-                                            <span class="badge bg-<?php echo $status_class; ?>">
-                                                <?php echo $status_text; ?>
-                                            </span>
-                                        </td>
-                                        <td>
-                                            <div class="btn-group btn-group-sm">
-                                                <a href="sale_view.php?id=<?php echo $sale['id']; ?>" class="btn btn-info" title="View">
-                                                    <i class="bi bi-eye"></i>
-                                                </a>
-                                                <a href="invoice.php?id=<?php echo $sale['id']; ?>" class="btn btn-secondary" target="_blank" title="Print">
-                                                    <i class="bi bi-printer"></i>
-                                                </a>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                    <?php endwhile; ?>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
+                                    <span class="badge bg-<?php echo $status_class; ?>">
+                                        <?php echo $status_text; ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <div class="btn-group btn-group-sm">
+                                        <a href="sale_view.php?id=<?php echo $sale['id']; ?>" class="btn btn-info" title="View">
+                                            <i class="bi bi-eye"></i>
+                                        </a>
+                                        <a href="invoice.php?id=<?php echo $sale['id']; ?>" class="btn btn-secondary" target="_blank" title="Print">
+                                            <i class="bi bi-printer"></i>
+                                        </a>
+                                    </div>
+                                </td>
+                            </tr>
+                            <?php endwhile; ?>
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>
     </div>
-
+</div>
     <script>
     // Parts data
     var partsByCategory = <?php echo json_encode($parts_map); ?> || {};
@@ -707,12 +765,12 @@ while($p = mysqli_fetch_assoc($parts)) {
                 discountDisplay.innerHTML = '₹' + discount.toFixed(2);
             }
             
-            // Calculate grand total
+            // Calculate grand total after discount
             let grandTotal = subTotal - discount;
             if (grandTotal < 0) grandTotal = 0;
             grandTotalInput.value = grandTotal.toFixed(2);
             
-            // Update due amount
+            // Update due amount based on grand total after discount
             const paidAmount = parseFloat(paidAmountInput.value) || 0;
             let dueAmount = grandTotal - paidAmount;
             

@@ -33,15 +33,17 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['add_payment'])) {
     
     try {
         // Get current sale details
-        $current_sale = mysqli_fetch_assoc(mysqli_query($conn, "SELECT total_amount, paid_amount, due_amount FROM sales WHERE id = $sale_id"));
+        $current_sale = mysqli_fetch_assoc(mysqli_query($conn, "SELECT grand_total, paid_amount, total_amount FROM sales WHERE id = $sale_id"));
         
+        // Use Grand Total from database
+        $grand_total = $current_sale['grand_total'] ?? $current_sale['total_amount'];
         $new_paid_amount = $current_sale['paid_amount'] + $payment_amount;
-        $new_due_amount = $current_sale['total_amount'] - $new_paid_amount;
+        $new_due_amount = $grand_total - $new_paid_amount;
         
         // Determine payment status
         if ($new_due_amount <= 0) {
             $payment_status = 'paid';
-            $new_due_amount = 0; // Ensure due amount is exactly 0
+            $new_due_amount = 0;
         } else {
             $payment_status = 'partial';
         }
@@ -97,6 +99,20 @@ $payment_summary = mysqli_fetch_assoc(mysqli_query($conn, "SELECT
                                                            SUM(CASE WHEN payment_method = 'online' THEN payment_amount ELSE 0 END) as online_total,
                                                            SUM(CASE WHEN payment_method = 'bank_transfer' THEN payment_amount ELSE 0 END) as bank_total
                                                            FROM sale_payments WHERE sale_id = $sale_id"));
+
+// Calculate subtotal from items
+$subtotal = 0;
+mysqli_data_seek($items, 0);
+while($item = mysqli_fetch_assoc($items)) {
+    $subtotal += $item['quantity'] * $item['selling_price'];
+}
+
+// Grand Total from database (with discount applied)
+$grand_total = $sale_details['grand_total'] ?? $sale_details['total_amount'];
+
+// Calculate due amount based on Grand Total
+$correct_due_amount = $grand_total - $sale_details['paid_amount'];
+if ($correct_due_amount < 0) $correct_due_amount = 0;
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -107,7 +123,6 @@ $payment_summary = mysqli_fetch_assoc(mysqli_query($conn, "SELECT
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css">
     <style>
-        /* smaller fonts for payment summary and breakdown */
         .payment-summary .card-body h6 { font-size: 10px; margin-bottom: 4px; }
         .payment-summary .card-body h3 { font-size: 16px; margin-bottom: 0; }
         .payment-summary .card-body { padding: 8px; }
@@ -115,12 +130,68 @@ $payment_summary = mysqli_fetch_assoc(mysqli_query($conn, "SELECT
         .payment-breakdown .card-body h4 { font-size: 16px; margin: 0; }
         .payment-breakdown .border { padding: 6px; }
         .payment-breakdown .row.mt-3 { margin-top: 8px !important; }
-        /* reduce spacing between sections */
         .payment-summary, .payment-breakdown, .card.mb-4 { margin-bottom: 10px !important; }
         .payment-summary .row > div, .payment-breakdown .row > div { padding-bottom: 0 !important; }
-        /* specific shrink for items sold before history */
         .items-sold-section { margin-bottom: 5px !important; }
         .payment-history-section { margin-top: 5px !important; }
+        
+        /* New styles for discount display */
+        .discount-badge-large {
+            background: linear-gradient(135deg, #17a2b8, #0d6efd);
+            color: white;
+            padding: 12px 20px;
+            border-radius: 10px;
+            font-size: 16px;
+            display: inline-block;
+            margin-bottom: 15px;
+            box-shadow: 0 4px 10px rgba(13, 110, 253, 0.3);
+            border: 1px solid rgba(255,255,255,0.2);
+            width: 100%;
+            text-align: center;
+        }
+        .discount-badge-large i {
+            font-size: 20px;
+            margin-right: 8px;
+        }
+        .discount-amount-highlight {
+            font-size: 18px;
+            font-weight: bold;
+            color: #ffc107;
+            background: rgba(0,0,0,0.2);
+            padding: 5px 15px;
+            border-radius: 50px;
+            margin-left: 10px;
+        }
+        .grand-total-text {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #28a745;
+        }
+        .due-amount-correct {
+            font-size: 1.2em;
+            font-weight: bold;
+        }
+        .subtotal-text {
+            color: #6c757d;
+            text-decoration: line-through;
+            font-size: 0.9em;
+            margin-right: 10px;
+        }
+        .discount-row {
+            background: #e7f3ff;
+            border-left: 4px solid #0d6efd;
+        }
+        .discount-row td {
+            color: #004085;
+            font-weight: 600;
+        }
+        .savings-badge {
+            background: #28a745;
+            color: white;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 14px;
+        }
     </style>
 </head>
 <body>
@@ -156,7 +227,7 @@ $payment_summary = mysqli_fetch_assoc(mysqli_query($conn, "SELECT
         <div class="d-flex justify-content-between mb-3">
             <h4>Sale Details - Invoice #<?php echo htmlspecialchars($sale_details['invoice_number']); ?></h4>
             <div>
-                <?php if($sale_details['due_amount'] > 0): ?>
+                <?php if($correct_due_amount > 0): ?>
                 <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addPaymentModal">
                     <i class="bi bi-cash"></i> Add Payment
                 </button>
@@ -186,22 +257,33 @@ $payment_summary = mysqli_fetch_assoc(mysqli_query($conn, "SELECT
                     <div class="col-md-3">
                         <strong>Customer:</strong> <?php echo htmlspecialchars($sale_details['customer_name'] ?? 'Walk-in Customer'); ?>
                     </div>
-                    <?php if($sale_details['customer_id']): 
-    $customer_vehicle = mysqli_fetch_assoc(mysqli_query($conn, "SELECT vehicle_registration FROM customers WHERE id = " . $sale_details['customer_id']));
-    if($customer_vehicle && $customer_vehicle['vehicle_registration']): 
-    ?>
-    <div class="row mt-2">
-        <div class="col-12">
-            <strong>Vehicle Registration:</strong> 
-            <span class="badge bg-info fs-6 p-2"><?php echo $customer_vehicle['vehicle_registration']; ?></span>
-        </div>
-    </div>
-    <?php endif; ?>
-<?php endif; ?>
                     <div class="col-md-3">
                         <strong>Created By:</strong> <?php echo htmlspecialchars($sale_details['username']); ?>
                     </div>
                 </div>
+                
+                <!-- Display Discount Information prominently -->
+                <?php if(isset($sale_details['discount_amount']) && $sale_details['discount_amount'] > 0): ?>
+                <div class="row mt-3">
+                    <div class="col-12">
+                        <div class="discount-badge-large">
+                            <i class="bi bi-tags"></i> 
+                            <strong>DISCOUNT APPLIED</strong>
+                            <span class="discount-amount-highlight">
+                                <?php if($sale_details['discount_type'] == 'percentage'): ?>
+                                    <?php echo $sale_details['discount_value']; ?>% OFF
+                                <?php else: ?>
+                                    ₹<?php echo number_format($sale_details['discount_value'], 2); ?> OFF
+                                <?php endif; ?>
+                            </span>
+                            <span class="savings-badge ms-2">
+                                <i class="bi bi-piggy-bank"></i> You Saved: ₹<?php echo number_format($sale_details['discount_amount'], 2); ?>
+                            </span>
+                        </div>
+                    </div>
+                </div>
+                <?php endif; ?>
+                
                 <?php if($sale_details['email'] || $sale_details['phone']): ?>
                 <div class="row mt-2">
                     <?php if($sale_details['email']): ?>
@@ -216,6 +298,20 @@ $payment_summary = mysqli_fetch_assoc(mysqli_query($conn, "SELECT
                     <?php endif; ?>
                 </div>
                 <?php endif; ?>
+                
+                <?php if($sale_details['customer_id']): 
+                    $customer_vehicle = mysqli_fetch_assoc(mysqli_query($conn, "SELECT vehicle_registration FROM customers WHERE id = " . $sale_details['customer_id']));
+                    if($customer_vehicle && $customer_vehicle['vehicle_registration']): 
+                ?>
+                <div class="row mt-2">
+                    <div class="col-12">
+                        <strong>Vehicle Registration:</strong> 
+                        <span class="badge bg-info fs-6 p-2"><?php echo $customer_vehicle['vehicle_registration']; ?></span>
+                    </div>
+                </div>
+                <?php endif; ?>
+                <?php endif; ?>
+                
                 <?php if($sale_details['address']): ?>
                 <div class="row mt-2">
                     <div class="col-12">
@@ -226,17 +322,40 @@ $payment_summary = mysqli_fetch_assoc(mysqli_query($conn, "SELECT
             </div>
         </div>
 
-        <!-- Payment Summary -->
+        <!-- Payment Summary with Discount Highlight -->
         <div class="row mb-4 payment-summary">
-            <div class="col-md-3">
-                <div class="card bg-success text-white">
+            <div class="col-md-2">
+                <div class="card bg-secondary text-white">
                     <div class="card-body">
-                        <h6>Total Amount</h6>
-                        <h3>₹<?php echo number_format($sale_details['total_amount'], 2); ?></h3>
+                        <h6>Subtotal</h6>
+                        <h3>₹<?php echo number_format($subtotal, 2); ?></h3>
+                        <small>Before discount</small>
                     </div>
                 </div>
             </div>
-            <div class="col-md-3">
+            <?php if(isset($sale_details['discount_amount']) && $sale_details['discount_amount'] > 0): ?>
+            <div class="col-md-2">
+                <div class="card bg-info text-white">
+                    <div class="card-body">
+                        <h6>Discount</h6>
+                        <h3 class="text-warning">-₹<?php echo number_format($sale_details['discount_amount'], 2); ?></h3>
+                        <?php if($sale_details['discount_type'] == 'percentage'): ?>
+                            <small><?php echo $sale_details['discount_value']; ?>% off</small>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            </div>
+            <?php endif; ?>
+            <div class="col-md-<?php echo (isset($sale_details['discount_amount']) && $sale_details['discount_amount'] > 0) ? '2' : '3'; ?>">
+                <div class="card bg-primary text-white">
+                    <div class="card-body">
+                        <h6>Grand Total</h6>
+                        <h3>₹<?php echo number_format($grand_total, 2); ?></h3>
+                        <small>After discount</small>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-<?php echo (isset($sale_details['discount_amount']) && $sale_details['discount_amount'] > 0) ? '2' : '3'; ?>">
                 <div class="card bg-info text-white">
                     <div class="card-body">
                         <h6>Paid Amount</h6>
@@ -244,28 +363,14 @@ $payment_summary = mysqli_fetch_assoc(mysqli_query($conn, "SELECT
                     </div>
                 </div>
             </div>
-            <div class="col-md-3">
-                <div class="card bg-<?php echo $sale_details['due_amount'] > 0 ? 'danger' : 'success'; ?> text-white">
+            <div class="col-md-<?php echo (isset($sale_details['discount_amount']) && $sale_details['discount_amount'] > 0) ? '2' : '3'; ?>">
+                <div class="card bg-<?php echo $correct_due_amount > 0 ? 'danger' : 'success'; ?> text-white">
                     <div class="card-body">
                         <h6>Due Amount</h6>
-                        <h3>₹<?php echo number_format($sale_details['due_amount'], 2); ?></h3>
-                        <?php if($sale_details['due_amount'] <= 0): ?>
+                        <h3 class="due-amount-correct">₹<?php echo number_format($correct_due_amount, 2); ?></h3>
+                        <?php if($correct_due_amount <= 0): ?>
                         <span class="badge bg-light text-dark">FULLY PAID</span>
                         <?php endif; ?>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="card bg-warning text-white">
-                    <div class="card-body">
-                        <h6>Payment Status</h6>
-                        <h3>
-                            <?php 
-                            if($sale_details['payment_status'] == 'paid') echo '<span class="badge bg-success">PAID</span>';
-                            elseif($sale_details['payment_status'] == 'partial') echo '<span class="badge bg-warning">PARTIAL</span>';
-                            else echo '<span class="badge bg-danger">PENDING</span>';
-                            ?>
-                        </h3>
                     </div>
                 </div>
             </div>
@@ -305,17 +410,17 @@ $payment_summary = mysqli_fetch_assoc(mysqli_query($conn, "SELECT
                                 </div>
                             </div>
                         </div>
-                        <!--<div class="row mt-3">
-                            <div class="col-12 text-end">
-                                <strong>Total Paid: </strong> ₹<?php echo number_format($payment_summary['total_paid'] ?? 0, 2); ?>
-                            </div>  
-                        </div>-->
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Items Sold -->
+        <?php
+        // Reset the items pointer
+        mysqli_data_seek($items, 0);
+        ?>
+        
+        <!-- Items Sold with Discount Row -->
         <div class="card mb-4 items-sold-section">
             <div class="card-header">
                 <h5 class="mb-0">Items Sold</h5>
@@ -334,10 +439,10 @@ $payment_summary = mysqli_fetch_assoc(mysqli_query($conn, "SELECT
                         </thead>
                         <tbody>
                             <?php 
-                            $subtotal = 0;
+                            $display_subtotal = 0;
                             while($item = mysqli_fetch_assoc($items)): 
                                 $total = $item['quantity'] * $item['selling_price'];
-                                $subtotal += $total;
+                                $display_subtotal += $total;
                             ?>
                             <tr>
                                 <td><?php echo htmlspecialchars($item['part_number']); ?></td>
@@ -351,12 +456,56 @@ $payment_summary = mysqli_fetch_assoc(mysqli_query($conn, "SELECT
                         <tfoot>
                             <tr>
                                 <th colspan="4" class="text-end">Subtotal:</th>
-                                <th>₹<?php echo number_format($subtotal, 2); ?></th>
+                                <th>₹<?php echo number_format($display_subtotal, 2); ?></th>
                             </tr>
-                            <tr>
+                            
+                            <!-- Discount Row - Highlighted -->
+                            <?php if(isset($sale_details['discount_amount']) && $sale_details['discount_amount'] > 0): ?>
+                            <tr class="discount-row">
+                                <th colspan="4" class="text-end">
+                                    <i class="bi bi-tags"></i> 
+                                    Discount 
+                                    <?php if($sale_details['discount_type'] == 'percentage'): ?>
+                                        (<?php echo $sale_details['discount_value']; ?>%)
+                                    <?php endif; ?>:
+                                </th>
+                                <th class="text-info">
+                                    -₹<?php echo number_format($sale_details['discount_amount'], 2); ?>
+                                    <small class="d-block text-muted">You saved this amount</small>
+                                </th>
+                            </tr>
+                            <?php endif; ?>
+                            
+                            <!-- Grand Total Row -->
+                            <tr class="grand-total-row">
                                 <th colspan="4" class="text-end">Grand Total:</th>
-                                <th>₹<?php echo number_format($sale_details['total_amount'], 2); ?></th>
+                                <th class="grand-total-text">₹<?php echo number_format($grand_total, 2); ?></th>
                             </tr>
+                            
+                            <!-- Paid Amount -->
+                            <tr>
+                                <th colspan="4" class="text-end">Paid Amount:</th>
+                                <th class="text-success">₹<?php echo number_format($sale_details['paid_amount'], 2); ?></th>
+                            </tr>
+                            
+                            <!-- Due Amount -->
+                            <tr class="<?php echo $correct_due_amount > 0 ? 'due-amount-row' : ''; ?>">
+                                <th colspan="4" class="text-end">Due Amount:</th>
+                                <th class="text-<?php echo $correct_due_amount > 0 ? 'danger' : 'success'; ?> due-amount-correct">
+                                    ₹<?php echo number_format($correct_due_amount, 2); ?>
+                                </th>
+                            </tr>
+                            
+                            <!-- Savings Summary -->
+                            <?php if(isset($sale_details['discount_amount']) && $sale_details['discount_amount'] > 0): ?>
+                            <tr class="table-info">
+                                <th colspan="5" class="text-center">
+                                    <i class="bi bi-piggy-bank"></i> 
+                                    Total Savings: ₹<?php echo number_format($sale_details['discount_amount'], 2); ?> 
+                                    (<?php echo number_format(($sale_details['discount_amount'] / $display_subtotal) * 100, 1); ?>% off)
+                                </th>
+                            </tr>
+                            <?php endif; ?>
                         </tfoot>
                     </table>
                 </div>
@@ -434,15 +583,27 @@ $payment_summary = mysqli_fetch_assoc(mysqli_query($conn, "SELECT
                         <input type="hidden" name="sale_id" value="<?php echo $sale_id; ?>">
                         
                         <div class="mb-3">
+                            <label class="form-label">Grand Total</label>
+                            <input type="text" class="form-control" value="₹<?php echo number_format($grand_total, 2); ?>" readonly style="font-weight: bold; color: #28a745;">
+                        </div>
+                        
+                        <?php if(isset($sale_details['discount_amount']) && $sale_details['discount_amount'] > 0): ?>
+                        <div class="mb-3">
+                            <label class="form-label">Discount Applied</label>
+                            <input type="text" class="form-control" value="-₹<?php echo number_format($sale_details['discount_amount'], 2); ?>" readonly style="font-weight: bold; color: #17a2b8;">
+                        </div>
+                        <?php endif; ?>
+                        
+                        <div class="mb-3">
                             <label class="form-label">Current Due Amount</label>
-                            <input type="text" class="form-control" id="currentDue" value="<?php echo $sale_details['due_amount']; ?>" readonly style="font-weight: bold; color: #dc3545; font-size: 1.2em;">
+                            <input type="text" class="form-control" id="currentDue" value="<?php echo $correct_due_amount; ?>" readonly style="font-weight: bold; color: #dc3545; font-size: 1.2em;">
                         </div>
                         
                         <div class="mb-3">
                             <label for="payment_amount" class="form-label">Payment Amount *</label>
                             <input type="number" step="0.01" class="form-control" id="payment_amount" name="payment_amount" 
-                                   max="<?php echo $sale_details['due_amount']; ?>" required oninput="updateRemainingDue()">
-                            <small class="text-muted">Maximum: ₹<?php echo number_format($sale_details['due_amount'], 2); ?></small>
+                                   max="<?php echo $correct_due_amount; ?>" required oninput="updateRemainingDue()">
+                            <small class="text-muted">Maximum: ₹<?php echo number_format($correct_due_amount, 2); ?></small>
                         </div>
                         
                         <div class="mb-3">
@@ -488,7 +649,6 @@ $payment_summary = mysqli_fetch_assoc(mysqli_query($conn, "SELECT
         let remainingElement = document.getElementById('remainingDue');
         remainingElement.value = '₹' + remainingDue.toFixed(2);
         
-        // Change color based on remaining amount
         if (remainingDue <= 0) {
             remainingElement.style.color = '#28a745';
             remainingElement.style.fontWeight = 'bold';
@@ -497,7 +657,6 @@ $payment_summary = mysqli_fetch_assoc(mysqli_query($conn, "SELECT
             remainingElement.style.fontWeight = 'bold';
         }
         
-        // Validate payment amount
         if (paymentAmount > currentDue) {
             document.getElementById('payment_amount').setCustomValidity('Payment amount cannot exceed due amount');
             document.getElementById('submitPayment').disabled = true;
@@ -507,7 +666,6 @@ $payment_summary = mysqli_fetch_assoc(mysqli_query($conn, "SELECT
         }
     }
     
-    // Initialize on modal open
     document.getElementById('addPaymentModal').addEventListener('shown.bs.modal', function () {
         updateRemainingDue();
     });

@@ -3,19 +3,19 @@ require_once 'config.php';
 
 if (!isLoggedIn()) {
     redirect('index.php');
-
 }
 
 $sale_id = $_GET['id'] ?? 0;
 
-// Fetch sale details with customer information
+// Fetch sale details with customer information - Use grand_total if available
 $sale = mysqli_query($conn, "SELECT s.*, 
                                      c.customer_name, 
                                      c.phone, 
                                      c.address, 
                                      c.email,
                                      c.vehicle_registration,
-                                     u.username
+                                     u.username,
+                                     COALESCE(s.grand_total, s.total_amount) as invoice_total
                               FROM sales s
                               LEFT JOIN customers c ON s.customer_id = c.id
                               LEFT JOIN users u ON s.created_by = u.id
@@ -45,6 +45,20 @@ $settings_result = mysqli_query($conn, "SELECT setting_key, setting_value FROM s
 while($row = mysqli_fetch_assoc($settings_result)) {
     $settings[$row['setting_key']] = $row['setting_value'];
 }
+
+// Calculate subtotal from items
+$subtotal = 0;
+mysqli_data_seek($items, 0);
+while($item = mysqli_fetch_assoc($items)) {
+    $subtotal += $item['quantity'] * $item['selling_price'];
+}
+
+// Grand Total from database (with discount applied)
+$grand_total = $sale_details['invoice_total'];
+
+// Calculate due amount based on Grand Total
+$correct_due_amount = $grand_total - $sale_details['paid_amount'];
+if ($correct_due_amount < 0) $correct_due_amount = 0;
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -58,40 +72,11 @@ while($row = mysqli_fetch_assoc($settings_result)) {
             .no-print {
                 display: none !important;
             }
-            * {
-                page-break-inside: avoid !important;
-            }
-            html, body {
-                background: white;
-                font-size: 11pt;
-                margin: 0;
-                padding: 0;
-                height: auto;
-                overflow: hidden;
-            }
-            @page {
-                size: A4;
-                margin: 10mm;
-            }
             .invoice-box {
                 border: none;
                 box-shadow: none;
                 margin: 0;
                 padding: 20px;
-                /* remove strict height to allow content to flow, will scale instead */
-                /* max-height: 297mm; */
-                page-break-inside: avoid;
-                transform: scale(0.95);
-                transform-origin: top left;
-                overflow: hidden;
-            }
-            table {
-                page-break-inside: avoid;
-            }
-            .badge {
-                border: 1px solid #000;
-                color: #000 !important;
-                background: transparent !important;
             }
         }
         .invoice-box {
@@ -118,12 +103,6 @@ while($row = mysqli_fetch_assoc($settings_result)) {
             font-weight: bold;
             font-size: 14px;
         }
-        .invoice-header h4 {
-            color: #7f8c8d;
-            margin-top: 0;
-            margin-bottom: 1px;
-            font-size: 11px;
-        }
         .business-info {
             text-align: center;
             margin-bottom: 2px;
@@ -132,7 +111,6 @@ while($row = mysqli_fetch_assoc($settings_result)) {
             border-radius: 5px;
             font-size: 10px;
         }
-        /* combined details section */
         .details-section {
             display: flex;
             flex-wrap: wrap;
@@ -147,12 +125,6 @@ while($row = mysqli_fetch_assoc($settings_result)) {
             background: #f8f9fa;
             border-radius: 5px;
         }
-        .invoice-details table {
-            width: 100%;
-        }
-        .invoice-details td {
-            padding: 2px 3px;
-        }
         .customer-details {
             flex: 1 1 45%;
             margin: 0;
@@ -165,10 +137,9 @@ while($row = mysqli_fetch_assoc($settings_result)) {
             color: #2c3e50;
             margin: 0 0 6px 0;
             padding-bottom: 4px;
-            border-bottom: 2x solid #f0f0f0;
+            border-bottom: 2px solid #f0f0f0;
             font-size: 12px;
         }
-        
         .items-table {
             width: 100%;
             margin-bottom: 10px;
@@ -216,6 +187,24 @@ while($row = mysqli_fetch_assoc($settings_result)) {
             font-size: 11px;
             color: #7f8c8d;
         }
+        .discount-info {
+            background: #e7f3ff;
+            color: #004085;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-weight: bold;
+            border: 1px solid #b8daff;
+            display: inline-block;
+            margin-bottom: 10px;
+        }
+        .grand-total {
+            font-size: 1.2em;
+            color: #28a745;
+        }
+        .due-amount {
+            font-size: 1.1em;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -236,7 +225,7 @@ while($row = mysqli_fetch_assoc($settings_result)) {
     <div class="invoice-box">
         <!-- Business Header -->
         <div class="invoice-header">
-            <h2><?php echo htmlspecialchars($settings['business_name'] ?? 'Bike Management System'); ?></h2>
+            <h2><?php echo htmlspecialchars($settings['business_name'] ?? 'PRAVEEN SERVICE CENTER'); ?></h2>
             <h4>Tax Invoice / Bill of Supply</h4>
             <div class="business-info">
                 <?php if(!empty($settings['business_address'])): ?>
@@ -246,13 +235,7 @@ while($row = mysqli_fetch_assoc($settings_result)) {
                     <?php if(!empty($settings['business_phone'])): ?>
                     <span><i class="bi bi-telephone"></i> <?php echo htmlspecialchars($settings['business_phone']); ?></span>
                     <?php endif; ?>
-                    <?php if(!empty($settings['business_email'])): ?>
-                    <span class="ms-3"><i class="bi bi-envelope"></i> <?php echo htmlspecialchars($settings['business_email']); ?></span>
-                    <?php endif; ?>
                 </div>
-                <?php if(!empty($settings['gst_number'])): ?>
-                <div class="mt-1"><strong>GSTIN:</strong> <?php echo htmlspecialchars($settings['gst_number']); ?></div>
-                <?php endif; ?>
             </div>
         </div>
 
@@ -267,10 +250,8 @@ while($row = mysqli_fetch_assoc($settings_result)) {
                         <td><?php echo date('d-m-Y', strtotime($sale_details['sale_date'])); ?></td>
                     </tr>
                     <tr>
-                        <td><strong>Place of Supply:</strong></td>
-                        <td><?php echo date('h:i A', strtotime($sale_details['created_at'])); ?></td>
                         <td><strong>Payment Status:</strong></td>
-                        <td>
+                        <td colspan="3">
                             <span class="payment-status status-<?php echo $sale_details['payment_status']; ?>">
                                 <?php 
                                 if($sale_details['payment_status'] == 'paid') echo 'PAID';
@@ -286,43 +267,44 @@ while($row = mysqli_fetch_assoc($settings_result)) {
                 <h5><i class="bi bi-person"></i> Customer Details</h5>
                 <table style="width: 100%;">
                     <tr>
-                        <td style="width: 150px;"><strong>Customer Name:</strong></td>
+                        <td style="width: 120px;"><strong>Name:</strong></td>
                         <td><?php echo htmlspecialchars($sale_details['customer_name'] ?? 'Walk-in Customer'); ?></td>
                     </tr>
                     <?php if(!empty($sale_details['phone'])): ?>
                     <tr>
-                        <td><strong>Phone No:</strong></td>
+                        <td><strong>Phone:</strong></td>
                         <td><?php echo htmlspecialchars($sale_details['phone']); ?></td>
                     </tr>
                     <?php endif; ?>
-                    <?php if(!empty($sale_details['email'])): ?>
                     <tr>
-                        <td><strong>Email:</strong></td>
-                        <td><?php echo htmlspecialchars($sale_details['email']); ?></td>
-                    </tr>
-                    <?php endif; ?>
-                    <!-- Vehicle Registration - FIXED: Now shows vehicle number -->
-                    <tr>
-                        <td><strong>Vehicle Reg No:</strong></td>
+                        <td><strong>Vehicle:</strong></td>
                         <td>
                             <?php if(!empty($sale_details['vehicle_registration'])): ?>
                                 <span class="vehicle-badge">
-                                    <i class="bi bi-bicycle"></i> <?php echo htmlspecialchars($sale_details['vehicle_registration']); ?>
+                                    <?php echo htmlspecialchars($sale_details['vehicle_registration']); ?>
                                 </span>
                             <?php else: ?>
-                                <span class="text-muted">Not provided</span>
+                                <span class="text-muted">N/A</span>
                             <?php endif; ?>
                         </td>
                     </tr>
-                    <?php if(!empty($sale_details['address'])): ?>
-                    <tr>
-                        <td><strong>Address:</strong></td>
-                        <td><?php echo nl2br(htmlspecialchars($sale_details['address'])); ?></td>
-                    </tr>
-                    <?php endif; ?>
                 </table>
             </div>
         </div>
+
+        <!-- Discount Information -->
+        <?php if(isset($sale_details['discount_amount']) && $sale_details['discount_amount'] > 0): ?>
+        <div class="discount-info text-center mb-2">
+            <i class="bi bi-tags"></i> 
+            Discount Applied: 
+            <?php if($sale_details['discount_type'] == 'percentage'): ?>
+                <?php echo $sale_details['discount_value']; ?>% 
+            <?php else: ?>
+                ₹<?php echo number_format($sale_details['discount_value'], 2); ?>
+            <?php endif; ?>
+            (Savings: ₹<?php echo number_format($sale_details['discount_amount'], 2); ?>)
+        </div>
+        <?php endif; ?>
 
         <!-- Items Table -->
         <table class="items-table">
@@ -339,96 +321,92 @@ while($row = mysqli_fetch_assoc($settings_result)) {
             <tbody>
                 <?php 
                 $sl_no = 1;
-                $subtotal = 0;
+                $display_subtotal = 0;
+                mysqli_data_seek($items, 0);
                 while($item = mysqli_fetch_assoc($items)): 
                     $total = $item['quantity'] * $item['selling_price'];
-                    $subtotal += $total;
+                    $display_subtotal += $total;
                 ?>
                 <tr>
                     <td><?php echo $sl_no++; ?></td>
                     <td><?php echo htmlspecialchars($item['part_number']); ?></td>
                     <td><?php echo htmlspecialchars($item['part_name']); ?></td>
                     <td><?php echo $item['quantity']; ?></td>
-                    <td class="text-end"><?php echo number_format($item['selling_price'], 2); ?></td>
-                    <td class="text-end"><?php echo number_format($total, 2); ?></td>
+                    <td class="text-end">₹<?php echo number_format($item['selling_price'], 2); ?></td>
+                    <td class="text-end">₹<?php echo number_format($total, 2); ?></td>
                 </tr>
                 <?php endwhile; ?>
             </tbody>
             <tfoot>
-                <!--<tr>
+                <tr>
                     <td colspan="5" class="text-end"><strong>Subtotal:</strong></td>
-                    <td class="text-end">₹<?php echo number_format($subtotal, 2); ?></td>
-                </tr>-->
-                <tr>
-                    <td colspan="5" class="text-end"><strong>CGST @0%:</strong></td>
-                    <td class="text-end">₹0.00</td>
+                    <td class="text-end">₹<?php echo number_format($display_subtotal, 2); ?></td>
                 </tr>
+                <?php if(isset($sale_details['discount_amount']) && $sale_details['discount_amount'] > 0): ?>
                 <tr>
-                    <td colspan="5" class="text-end"><strong>SGST @0%:</strong></td>
-                    <td class="text-end">₹0.00</td>
+                    <td colspan="5" class="text-end"><strong>Discount:</strong></td>
+                    <td class="text-end text-info">-₹<?php echo number_format($sale_details['discount_amount'], 2); ?></td>
                 </tr>
+                <?php endif; ?>
                 <tr>
                     <td colspan="5" class="text-end"><strong>Grand Total:</strong></td>
-                    <td class="text-end"><strong>₹<?php echo number_format($sale_details['total_amount'], 2); ?></strong></td>
+                    <td class="text-end grand-total"><strong>₹<?php echo number_format($grand_total, 2); ?></strong></td>
                 </tr>
                 <tr style="background: #e8f5e9;">
                     <td colspan="5" class="text-end"><strong>Amount Paid:</strong></td>
                     <td class="text-end text-success"><strong>₹<?php echo number_format($sale_details['paid_amount'], 2); ?></strong></td>
                 </tr>
-                <?php if($sale_details['due_amount'] > 0): ?>
+                <?php if($correct_due_amount > 0): ?>
                 <tr style="background: #ffebee;">
                     <td colspan="5" class="text-end"><strong>Balance Due:</strong></td>
-                    <td class="text-end text-danger"><strong>₹<?php echo number_format($sale_details['due_amount'], 2); ?></strong></td>
+                    <td class="text-end text-danger due-amount"><strong>₹<?php echo number_format($correct_due_amount, 2); ?></strong></td>
+                </tr>
+                <?php else: ?>
+                <tr style="background: #e8f5e9;">
+                    <td colspan="5" class="text-end"><strong>Balance Due:</strong></td>
+                    <td class="text-end text-success due-amount"><strong>₹0.00</strong></td>
                 </tr>
                 <?php endif; ?>
             </tfoot>
         </table>
 
-        <!-- Amount in Words -->
+        <!-- Amount in Words (using grand total after discount) -->
         <div class="mt-3">
             <strong>Amount in Words:</strong> 
-                <?php
-                // Safely generate amount-in-words. Use NumberFormatter when available,
-                // otherwise fall back to a simple converter for integers.
-                $amount = floatval($sale_details['total_amount'] ?? 0);
-                $integerPart = intval(floor($amount));
-                $fractionPart = round(($amount - $integerPart) * 100);
+            <?php
+            $amount = floatval($grand_total);
+            $integerPart = intval(floor($amount));
+            $fractionPart = round(($amount - $integerPart) * 100);
 
-                if (class_exists('NumberFormatter')) {
-                    try {
-                        $f = new NumberFormatter("en", NumberFormatter::SPELLOUT);
-                        $words = $f->format($integerPart);
-                    } catch (Exception $e) {
-                        $words = (string)$integerPart;
-                    }
-                } else {
-                    // Simple fallback for number to words (supports up to billions)
-                    function _num2words($n) {
-                        $units = ["", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"];
-                        $tens = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
-
-                        if ($n < 20) return $units[$n];
-                        if ($n < 100) return $tens[intval($n/10)] . ($n%10 ? ' ' . $units[$n%10] : '');
-                        if ($n < 1000) return _num2words(intval($n/100)) . ' hundred' . ($n%100 ? ' ' . _num2words($n%100) : '');
-                        if ($n < 1000000) return _num2words(intval($n/1000)) . ' thousand' . ($n%1000 ? ' ' . _num2words($n%1000) : '');
-                        if ($n < 1000000000) return _num2words(intval($n/1000000)) . ' million' . ($n%1000000 ? ' ' . _num2words($n%1000000) : '');
-                        return (string)$n;
-                    }
-                    $words = _num2words($integerPart);
+            if (class_exists('NumberFormatter')) {
+                try {
+                    $f = new NumberFormatter("en", NumberFormatter::SPELLOUT);
+                    $words = $f->format($integerPart);
+                } catch (Exception $e) {
+                    $words = (string)$integerPart;
                 }
+            } else {
+                function _num2words($n) {
+                    $units = ["", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"];
+                    $tens = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
 
-                $words = $words ? ucwords($words) : 'Zero';
-                if ($fractionPart > 0) {
-                    // include paise if any
-                    $words .= ' and ' . ($fractionPart) . '/100';
+                    if ($n < 20) return $units[$n];
+                    if ($n < 100) return $tens[intval($n/10)] . ($n%10 ? ' ' . $units[$n%10] : '');
+                    if ($n < 1000) return _num2words(intval($n/100)) . ' hundred' . ($n%100 ? ' ' . _num2words($n%100) : '');
+                    if ($n < 1000000) return _num2words(intval($n/1000)) . ' thousand' . ($n%1000 ? ' ' . _num2words($n%1000) : '');
+                    if ($n < 1000000000) return _num2words(intval($n/1000000)) . ' million' . ($n%1000000 ? ' ' . _num2words($n%1000000) : '');
+                    return (string)$n;
                 }
-                echo $words . " Rupees Only";
-                ?>
+                $words = _num2words($integerPart);
+            }
+
+            $words = $words ? ucwords($words) : 'Zero';
+            if ($fractionPart > 0) {
+                $words .= ' and ' . ($fractionPart) . '/100';
+            }
+            echo $words . " Rupees Only";
+            ?>
         </div>
-
-
-
-
 
         <!-- Footer -->
         <div class="footer-note">
