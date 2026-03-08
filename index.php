@@ -6,7 +6,6 @@ if (isLoggedIn()) {
     redirect('dashboard.php');
 }
 
-
 // Handle login
 $error = '';
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['login'])) {
@@ -26,6 +25,54 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['login'])) {
         $error = "Invalid username or password!";
     }
 }
+
+// Handle feedback submission
+$feedback_success = '';
+$feedback_error = '';
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['submit_feedback'])) {
+    $customer_name = mysqli_real_escape_string($conn, $_POST['customer_name']);
+    $customer_phone = mysqli_real_escape_string($conn, $_POST['customer_phone']);
+    $bike_number = strtoupper(mysqli_real_escape_string($conn, $_POST['bike_number']));
+    $rating = intval($_POST['rating']);
+    $feedback_text = mysqli_real_escape_string($conn, $_POST['feedback_text']);
+    $service_type = mysqli_real_escape_string($conn, $_POST['service_type']);
+    
+    $query = "INSERT INTO customer_feedback (customer_name, customer_phone, bike_number, rating, feedback_text, service_type) 
+              VALUES ('$customer_name', '$customer_phone', '$bike_number', $rating, '$feedback_text', '$service_type')";
+    
+    if (mysqli_query($conn, $query)) {
+        $feedback_success = "Thank you for your valuable feedback!";
+    } else {
+        $feedback_error = "Error submitting feedback: " . mysqli_error($conn);
+    }
+}
+
+// Get daily repair count for each mechanic
+$today = date('Y-m-d');
+$mechanic_stats = mysqli_query($conn, "SELECT 
+                                        u.username,
+                                        u.id,
+                                        COUNT(DISTINCT s.id) as bikes_repaired,
+                                        SUM(s.total_amount) as total_sales,
+                                        COUNT(DISTINCT j.id) as jobs_completed
+                                      FROM users u
+                                      LEFT JOIN sales s ON u.id = s.created_by AND s.sale_date = '$today'
+                                      LEFT JOIN pending_jobs j ON u.id = j.created_by AND DATE(j.created_at) = '$today' AND j.status = 'completed'
+                                      WHERE u.role = 'staff' OR u.role = 'admin'
+                                      GROUP BY u.id
+                                      ORDER BY bikes_repaired DESC");
+
+// Get recent feedbacks
+$recent_feedbacks = mysqli_query($conn, "SELECT * FROM customer_feedback ORDER BY created_at DESC LIMIT 6");
+
+// Get daily stats
+$daily_stats = mysqli_fetch_assoc(mysqli_query($conn, "SELECT 
+                                                      COUNT(DISTINCT s.id) as total_bikes_repaired,
+                                                      SUM(s.total_amount) as total_revenue,
+                                                      COUNT(DISTINCT j.id) as total_jobs
+                                                    FROM sales s
+                                                    LEFT JOIN pending_jobs j ON DATE(j.created_at) = '$today'
+                                                    WHERE s.sale_date = '$today'"));
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -42,6 +89,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['login'])) {
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <!-- AOS Animation Library -->
     <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
+    <!-- Lightbox for gallery -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/lightbox2/2.11.3/css/lightbox.min.css" rel="stylesheet">
     
     <style>
         * {
@@ -504,6 +553,302 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['login'])) {
             transform: translateY(-3px);
         }
 
+        /* Mechanic Stats Cards */
+        .mechanic-stats-section {
+            padding: 80px 0;
+            background: linear-gradient(135deg, #2c3e50, #3498db);
+            color: white;
+        }
+        
+        .mechanic-card {
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 15px;
+            padding: 25px;
+            transition: all 0.3s;
+            height: 100%;
+        }
+        
+        .mechanic-card:hover {
+            transform: translateY(-10px);
+            background: rgba(255,255,255,0.2);
+        }
+        
+        .mechanic-icon {
+            width: 70px;
+            height: 70px;
+            background: #ffc107;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+        }
+        
+        .mechanic-icon i {
+            font-size: 35px;
+            color: #000;
+        }
+        
+        .mechanic-name {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+        
+        .mechanic-stats {
+            font-size: 16px;
+            margin-bottom: 5px;
+        }
+        
+        .mechanic-stats i {
+            color: #ffc107;
+            margin-right: 8px;
+        }
+        
+        .mechanic-badge {
+            background: #ffc107;
+            color: #000;
+            padding: 5px 15px;
+            border-radius: 50px;
+            font-weight: 600;
+            font-size: 14px;
+            display: inline-block;
+            margin-top: 10px;
+        }
+
+        /* Gallery Upload Section */
+        .gallery-upload-section {
+            padding: 100px 0;
+            background: #fff;
+        }
+        
+        .upload-area {
+            border: 3px dashed #dee2e6;
+            border-radius: 20px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            background: #f8f9fa;
+            margin-bottom: 30px;
+        }
+        
+        .upload-area:hover {
+            border-color: #ffc107;
+            background: #fff3e0;
+        }
+        
+        .upload-area i {
+            font-size: 60px;
+            color: #6c757d;
+            margin-bottom: 20px;
+        }
+        
+        .upload-area h4 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .upload-area p {
+            color: #666;
+            margin-bottom: 0;
+        }
+        
+        .gallery-item {
+            position: relative;
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+            cursor: pointer;
+        }
+        
+        .gallery-item img {
+            width: 100%;
+            height: 250px;
+            object-fit: cover;
+            transition: transform 0.5s;
+        }
+        
+        .gallery-item:hover img {
+            transform: scale(1.1);
+        }
+        
+        .gallery-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(rgba(0,0,0,0.5), rgba(0,0,0,0.8));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        
+        .gallery-item:hover .gallery-overlay {
+            opacity: 1;
+        }
+        
+        .gallery-overlay i {
+            font-size: 48px;
+            color: #fff;
+        }
+        
+        .delete-image {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: #dc3545;
+            color: white;
+            width: 35px;
+            height: 35px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            opacity: 0;
+            transition: opacity 0.3s;
+            z-index: 10;
+            border: none;
+        }
+        
+        .gallery-item:hover .delete-image {
+            opacity: 1;
+        }
+
+        /* Feedback Section */
+        .feedback-section {
+            padding: 100px 0;
+            background: #f8f9fa;
+        }
+        
+        .feedback-form-card {
+            background: #fff;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            margin-bottom: 50px;
+        }
+        
+        .rating-stars {
+            font-size: 30px;
+            color: #ddd;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .rating-stars i {
+            margin: 0 5px;
+        }
+        
+        .rating-stars i:hover,
+        .rating-stars i.active {
+            color: #ffc107;
+        }
+        
+        .feedback-card {
+            background: #fff;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.05);
+            margin-bottom: 30px;
+            transition: all 0.3s;
+            height: 100%;
+            position: relative;
+        }
+        
+        .feedback-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+        
+        .feedback-rating {
+            color: #ffc107;
+            font-size: 20px;
+            margin-bottom: 15px;
+        }
+        
+        .feedback-text {
+            font-size: 16px;
+            color: #555;
+            line-height: 1.8;
+            margin-bottom: 20px;
+            font-style: italic;
+        }
+        
+        .feedback-author {
+            display: flex;
+            align-items: center;
+            border-top: 1px solid #dee2e6;
+            padding-top: 20px;
+        }
+        
+        .author-info h6 {
+            font-size: 16px;
+            font-weight: 700;
+            margin-bottom: 5px;
+            color: #333;
+        }
+        
+        .author-info p {
+            font-size: 13px;
+            color: #666;
+            margin: 0;
+        }
+        
+        .bike-number-feedback {
+            background: #e7f3ff;
+            color: #004085;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-left: 10px;
+        }
+        
+        .service-badge {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            padding: 5px 15px;
+            border-radius: 50px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .service-badge.general { background: #e7f3ff; color: #004085; }
+        .service-badge.repair { background: #f8d7da; color: #721c24; }
+        .service-badge.service { background: #d4edda; color: #155724; }
+        
+        /* Daily Stats Card */
+        .daily-stats-section {
+            padding: 60px 0;
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+        }
+        
+        .daily-stat-card {
+            text-align: center;
+            padding: 30px;
+        }
+        
+        .daily-stat-number {
+            font-size: 48px;
+            font-weight: 800;
+            margin-bottom: 10px;
+        }
+        
+        .daily-stat-label {
+            font-size: 18px;
+            opacity: 0.9;
+        }
+
         /* Video Section */
         .video-section {
             padding: 100px 0;
@@ -930,7 +1275,13 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['login'])) {
                         <a class="nav-link" href="#team">Team</a>
                     </li>
                     <li class="nav-item">
+                        <a class="nav-link" href="#mechanic-stats">Mechanics</a>
+                    </li>
+                    <li class="nav-item">
                         <a class="nav-link" href="#gallery">Gallery</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="#feedback">Feedback</a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="#testimonials">Reviews</a>
@@ -1262,62 +1613,252 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['login'])) {
         </div>
     </section>
 
-    <!-- Gallery Section -->
-    <section id="gallery" class="gallery-section">
+    <!-- Daily Mechanic Stats Section (NEW) -->
+    <section id="mechanic-stats" class="mechanic-stats-section">
+        <div class="container">
+            <div class="section-title text-white" data-aos="fade-up">
+                <h2 class="text-white">Today's Mechanic Performance</h2>
+                <p class="text-white-50">Daily repair count and performance of our expert mechanics</p>
+            </div>
+            
+            <!-- Daily Stats Overview -->
+            <div class="row mb-5">
+                <div class="col-md-4">
+                    <div class="daily-stat-card">
+                        <div class="daily-stat-number"><?php echo $daily_stats['total_bikes_repaired'] ?? 0; ?></div>
+                        <div class="daily-stat-label">Bikes Repaired Today</div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="daily-stat-card">
+                        <div class="daily-stat-number">₹<?php echo number_format($daily_stats['total_revenue'] ?? 0, 0); ?></div>
+                        <div class="daily-stat-label">Today's Revenue</div>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="daily-stat-card">
+                        <div class="daily-stat-number"><?php echo $daily_stats['total_jobs'] ?? 0; ?></div>
+                        <div class="daily-stat-label">Jobs Completed</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Individual Mechanic Cards -->
+            <div class="row g-4">
+                <?php 
+                mysqli_data_seek($mechanic_stats, 0);
+                while($mechanic = mysqli_fetch_assoc($mechanic_stats)): 
+                ?>
+                <div class="col-lg-4 col-md-6" data-aos="fade-up" data-aos-delay="<?php echo $mechanic['id'] * 50; ?>">
+                    <div class="mechanic-card">
+                        <div class="mechanic-icon">
+                            <i class="bi bi-person-badge"></i>
+                        </div>
+                        <h3 class="mechanic-name text-center"><?php echo htmlspecialchars($mechanic['username']); ?></h3>
+                        <div class="mechanic-stats">
+                            <i class="bi bi-bicycle"></i> Bikes Repaired Today: <strong><?php echo $mechanic['bikes_repaired'] ?? 0; ?></strong>
+                        </div>
+                        <div class="mechanic-stats">
+                            <i class="bi bi-cash-stack"></i> Sales Today: <strong>₹<?php echo number_format($mechanic['total_sales'] ?? 0, 2); ?></strong>
+                        </div>
+                        <div class="mechanic-stats">
+                            <i class="bi bi-check-circle"></i> Jobs Completed: <strong><?php echo $mechanic['jobs_completed'] ?? 0; ?></strong>
+                        </div>
+                        <div class="text-center mt-3">
+                            <span class="mechanic-badge">
+                                <i class="bi bi-star-fill"></i> 
+                                <?php 
+                                $performance = ($mechanic['bikes_repaired'] ?? 0) + ($mechanic['jobs_completed'] ?? 0);
+                                if($performance >= 5) echo "Top Performer";
+                                elseif($performance >= 3) echo "Good Performer";
+                                else echo "Active";
+                                ?>
+                            </span>
+                        </div>
+                    </div>
+                </div>
+                <?php endwhile; ?>
+            </div>
+            
+            <!-- Invoice Search Section -->
+            <div class="row mt-5">
+                <div class="col-md-6 mx-auto">
+                    <div class="card bg-transparent border-light">
+                        <div class="card-body text-white">
+                            <h5 class="card-title text-center mb-4"><i class="bi bi-search"></i> Track Your Bike Repair</h5>
+                            <form class="d-flex" onsubmit="trackInvoice(event)">
+                                <input type="text" class="form-control me-2" id="invoiceSearch" placeholder="Enter Invoice Number (e.g., INV-202403-00001)" required>
+                                <button type="submit" class="btn btn-warning">Track</button>
+                            </form>
+                            <div id="trackingResult" class="mt-3 text-center" style="display: none;"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Gallery Upload Section (NEW) -->
+    <section id="gallery-upload" class="gallery-upload-section">
         <div class="container">
             <div class="section-title" data-aos="fade-up">
-                <h2>Our Work Gallery</h2>
-                <p>See some of the bikes we've worked on</p>
+                <h2>Photo Gallery</h2>
+                <p>Share your bike repair moments with us</p>
             </div>
+            
+            <!-- Upload Area - Only visible to logged in users -->
+            <?php if(isset($_SESSION['user_id'])): ?>
+            <div class="upload-area" onclick="document.getElementById('galleryUpload').click()" data-aos="fade-up">
+                <input type="file" id="galleryUpload" name="gallery_image" accept="image/*" style="display: none;" onchange="uploadGalleryImage(this)">
+                <i class="bi bi-cloud-upload"></i>
+                <h4>Click to Upload Photos</h4>
+                <p>Share your repaired bikes, workshop moments, or customer bikes</p>
+                <small class="text-muted">Supported formats: JPG, PNG, GIF (Max 5MB)</small>
+            </div>
+            <?php endif; ?>
+            
+            <!-- Gallery Display -->
+            <div class="row g-4" id="galleryContainer">
+                <?php
+                // Fetch gallery images
+                $gallery_images = mysqli_query($conn, "SELECT * FROM gallery_images ORDER BY created_at DESC LIMIT 12");
+                while($image = mysqli_fetch_assoc($gallery_images)):
+                ?>
+                <div class="col-lg-3 col-md-4 col-6" data-aos="zoom-in">
+                    <div class="gallery-item">
+                        <a href="uploads/gallery/<?php echo $image['image_path']; ?>" data-lightbox="gallery" data-title="<?php echo htmlspecialchars($image['caption'] ?? 'Bike Repair'); ?>">
+                            <img src="uploads/gallery/<?php echo $image['image_path']; ?>" alt="Gallery Image">
+                        </a>
+                        <div class="gallery-overlay">
+                            <i class="bi bi-search"></i>
+                        </div>
+                        <?php if(isset($_SESSION['user_id']) && $_SESSION['role'] == 'admin'): ?>
+                        <button class="delete-image" onclick="deleteGalleryImage(<?php echo $image['id']; ?>)">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                <?php endwhile; ?>
+            </div>
+            
+            <div class="text-center mt-4">
+                <button class="btn btn-outline-primary" onclick="loadMoreImages()">Load More</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- Customer Feedback Section (NEW) -->
+    <section id="feedback" class="feedback-section">
+        <div class="container">
+            <div class="section-title" data-aos="fade-up">
+                <h2>Customer Feedback</h2>
+                <p>Share your experience with us</p>
+            </div>
+            
+            <!-- Feedback Form -->
+            <div class="row justify-content-center">
+                <div class="col-md-8">
+                    <?php if($feedback_success): ?>
+                    <div class="alert alert-success alert-dismissible fade show" role="alert">
+                        <i class="bi bi-check-circle"></i> <?php echo $feedback_success; ?>
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                    <?php endif; ?>
+                    
+                    <?php if($feedback_error): ?>
+                    <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                        <i class="bi bi-exclamation-triangle"></i> <?php echo $feedback_error; ?>
+                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    </div>
+                    <?php endif; ?>
+                    
+                    <div class="feedback-form-card" data-aos="fade-up">
+                        <form method="POST" id="feedbackForm">
+                            <div class="row g-3">
+                                <div class="col-md-6">
+                                    <label for="customer_name" class="form-label">Your Name *</label>
+                                    <input type="text" class="form-control" id="customer_name" name="customer_name" required>
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="customer_phone" class="form-label">Phone Number *</label>
+                                    <input type="tel" class="form-control" id="customer_phone" name="customer_phone" required>
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="bike_number" class="form-label">Bike Number</label>
+                                    <input type="text" class="form-control" id="bike_number" name="bike_number" placeholder="e.g., MH12AB1234" style="text-transform:uppercase">
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="service_type" class="form-label">Service Type *</label>
+                                    <select class="form-control" id="service_type" name="service_type" required>
+                                        <option value="">Select Service</option>
+                                        <option value="general">General Repair</option>
+                                        <option value="repair">Major Repair</option>
+                                        <option value="service">Regular Service</option>
+                                        <option value="oil_change">Oil Change</option>
+                                        <option value="electrical">Electrical Repair</option>
+                                        <option value="other">Other</option>
+                                    </select>
+                                </div>
+                                <div class="col-12">
+                                    <label class="form-label">Your Rating *</label>
+                                    <div class="rating-stars mb-3" id="ratingStars">
+                                        <i class="bi bi-star" data-rating="1"></i>
+                                        <i class="bi bi-star" data-rating="2"></i>
+                                        <i class="bi bi-star" data-rating="3"></i>
+                                        <i class="bi bi-star" data-rating="4"></i>
+                                        <i class="bi bi-star" data-rating="5"></i>
+                                    </div>
+                                    <input type="hidden" id="rating" name="rating" value="5">
+                                </div>
+                                <div class="col-12">
+                                    <label for="feedback_text" class="form-label">Your Feedback *</label>
+                                    <textarea class="form-control" id="feedback_text" name="feedback_text" rows="4" placeholder="Tell us about your experience..." required></textarea>
+                                </div>
+                                <div class="col-12 text-center">
+                                    <button type="submit" name="submit_feedback" class="btn btn-primary btn-lg">
+                                        <i class="bi bi-send"></i> Submit Feedback
+                                    </button>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Recent Feedbacks -->
+            <h4 class="text-center mb-4" data-aos="fade-up">Recent Customer Reviews</h4>
             <div class="row g-4">
-                <div class="col-lg-4 col-md-6" data-aos="zoom-in">
-                    <div class="gallery-item">
-                        <img src="https://images.unsplash.com/photo-1558981806-ec527fa84c39?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=1170&q=80" alt="Bike Repair">
-                        <div class="gallery-overlay">
-                            <i class="bi bi-search"></i>
+                <?php while($feedback = mysqli_fetch_assoc($recent_feedbacks)): 
+                    $rating = $feedback['rating'];
+                ?>
+                <div class="col-lg-4 col-md-6" data-aos="fade-up" data-aos-delay="<?php echo $feedback['id'] * 20; ?>">
+                    <div class="feedback-card">
+                        <span class="service-badge <?php echo $feedback['service_type']; ?>">
+                            <?php echo ucfirst($feedback['service_type']); ?>
+                        </span>
+                        <div class="feedback-rating">
+                            <?php for($i = 1; $i <= 5; $i++): ?>
+                                <i class="bi bi-star<?php echo $i <= $rating ? '-fill' : ''; ?>"></i>
+                            <?php endfor; ?>
+                        </div>
+                        <p class="feedback-text">"<?php echo htmlspecialchars($feedback['feedback_text']); ?>"</p>
+                        <div class="feedback-author">
+                            <div class="author-info">
+                                <h6><?php echo htmlspecialchars($feedback['customer_name']); ?></h6>
+                                <p>
+                                    <i class="bi bi-calendar"></i> <?php echo date('d M Y', strtotime($feedback['created_at'])); ?>
+                                    <?php if($feedback['bike_number']): ?>
+                                    <span class="bike-number-feedback">
+                                        <i class="bi bi-bicycle"></i> <?php echo $feedback['bike_number']; ?>
+                                    </span>
+                                    <?php endif; ?>
+                                </p>
+                            </div>
                         </div>
                     </div>
                 </div>
-                <div class="col-lg-4 col-md-6" data-aos="zoom-in" data-aos-delay="100">
-                    <div class="gallery-item">
-                        <img src="https://images.unsplash.com/photo-1486006920555-c77dc445181e?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=1170&q=80" alt="Bike Service">
-                        <div class="gallery-overlay">
-                            <i class="bi bi-search"></i>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-lg-4 col-md-6" data-aos="zoom-in" data-aos-delay="200">
-                    <div class="gallery-item">
-                        <img src="https://images.unsplash.com/photo-1558980664-10a60a8e6c3a?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=1170&q=80" alt="Bike Repair">
-                        <div class="gallery-overlay">
-                            <i class="bi bi-search"></i>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-lg-4 col-md-6" data-aos="zoom-in" data-aos-delay="300">
-                    <div class="gallery-item">
-                        <img src="https://images.unsplash.com/photo-1558981359-219d6364c9c8?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=1170&q=80" alt="Bike Service">
-                        <div class="gallery-overlay">
-                            <i class="bi bi-search"></i>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-lg-4 col-md-6" data-aos="zoom-in" data-aos-delay="400">
-                    <div class="gallery-item">
-                        <img src="https://images.unsplash.com/photo-1558981001-199536f7c9e9?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=1170&q=80" alt="Bike Repair">
-                        <div class="gallery-overlay">
-                            <i class="bi bi-search"></i>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-lg-4 col-md-6" data-aos="zoom-in" data-aos-delay="500">
-                    <div class="gallery-item">
-                        <img src="https://images.unsplash.com/photo-1558980665-10a60a8e6c3a?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=1170&q=80" alt="Bike Service">
-                        <div class="gallery-overlay">
-                            <i class="bi bi-search"></i>
-                        </div>
-                    </div>
-                </div>
+                <?php endwhile; ?>
             </div>
         </div>
     </section>
@@ -1348,7 +1889,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['login'])) {
     <section id="testimonials" class="testimonials-section">
         <div class="container">
             <div class="section-title" data-aos="fade-up">
-                <h2>Customer Reviews</h2>
+                <h2>Customer Testimonials</h2>
                 <p>What our happy customers say about us</p>
             </div>
             <div class="row g-4">
@@ -1529,7 +2070,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['login'])) {
                         <li><a href="#about">About Us</a></li>
                         <li><a href="#services">Services</a></li>
                         <li><a href="#team">Team</a></li>
+                        <li><a href="#mechanic-stats">Mechanics</a></li>
                         <li><a href="#gallery">Gallery</a></li>
+                        <li><a href="#feedback">Feedback</a></li>
                         <li><a href="#contact">Contact</a></li>
                     </ul>
                 </div>
@@ -1609,6 +2152,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['login'])) {
     <!-- Scripts -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lightbox2/2.11.3/js/lightbox.min.js"></script>
     
     <script>
         // Initialize AOS
@@ -1714,6 +2258,137 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['login'])) {
             loginModal.show();
         });
         <?php endif; ?>
+        
+        // Rating stars functionality
+        const stars = document.querySelectorAll('.rating-stars i');
+        const ratingInput = document.getElementById('rating');
+        
+        stars.forEach(star => {
+            star.addEventListener('mouseenter', function() {
+                const rating = this.dataset.rating;
+                highlightStars(rating);
+            });
+            
+            star.addEventListener('mouseleave', function() {
+                const currentRating = ratingInput.value;
+                highlightStars(currentRating);
+            });
+            
+            star.addEventListener('click', function() {
+                const rating = this.dataset.rating;
+                ratingInput.value = rating;
+                highlightStars(rating);
+            });
+        });
+        
+        function highlightStars(rating) {
+            stars.forEach(star => {
+                const starRating = star.dataset.rating;
+                if (starRating <= rating) {
+                    star.classList.remove('bi-star');
+                    star.classList.add('bi-star-fill');
+                } else {
+                    star.classList.remove('bi-star-fill');
+                    star.classList.add('bi-star');
+                }
+            });
+        }
+        
+        // Track invoice function
+        function trackInvoice(event) {
+            event.preventDefault();
+            const invoiceNumber = document.getElementById('invoiceSearch').value;
+            
+            // AJAX call to track invoice
+            fetch('track_invoice.php?invoice=' + encodeURIComponent(invoiceNumber))
+                .then(response => response.json())
+                .then(data => {
+                    const resultDiv = document.getElementById('trackingResult');
+                    if (data.found) {
+                        resultDiv.innerHTML = `
+                            <div class="alert alert-success">
+                                <h6>Invoice Found!</h6>
+                                <p>Customer: ${data.customer}<br>
+                                Date: ${data.date}<br>
+                                Status: <span class="badge bg-${data.status_color}">${data.status}</span><br>
+                                Total: ₹${data.total}</p>
+                            </div>
+                        `;
+                    } else {
+                        resultDiv.innerHTML = `
+                            <div class="alert alert-warning">
+                                <i class="bi bi-exclamation-circle"></i> Invoice not found. Please check the number.
+                            </div>
+                        `;
+                    }
+                    resultDiv.style.display = 'block';
+                });
+        }
+        
+        // Upload gallery image
+        function uploadGalleryImage(input) {
+            if (input.files && input.files[0]) {
+                const formData = new FormData();
+                formData.append('image', input.files[0]);
+                
+                fetch('upload_gallery.php', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        location.reload();
+                    } else {
+                        alert('Error uploading image: ' + data.error);
+                    }
+                });
+            }
+        }
+        
+        // Delete gallery image
+        function deleteGalleryImage(imageId) {
+            if (confirm('Are you sure you want to delete this image?')) {
+                fetch('delete_gallery.php?id=' + imageId, {
+                    method: 'POST'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        location.reload();
+                    } else {
+                        alert('Error deleting image');
+                    }
+                });
+            }
+        }
+        
+        // Load more images
+        let imagePage = 1;
+        function loadMoreImages() {
+            imagePage++;
+            fetch('load_gallery.php?page=' + imagePage)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.images) {
+                        const container = document.getElementById('galleryContainer');
+                        data.images.forEach(image => {
+                            container.innerHTML += `
+                                <div class="col-lg-3 col-md-4 col-6">
+                                    <div class="gallery-item">
+                                        <a href="uploads/gallery/${image.path}" data-lightbox="gallery" data-title="${image.caption}">
+                                            <img src="uploads/gallery/${image.path}" alt="Gallery Image">
+                                        </a>
+                                        <div class="gallery-overlay">
+                                            <i class="bi bi-search"></i>
+                                        </div>
+                                    </div>
+                                </div>
+                            `;
+                        });
+                    }
+                });
+        }
     </script>
 </body>
 </html>
